@@ -1,0 +1,6 @@
+build/
+*.o
+*.tmp
+__pycache__/
+*.pyc
+PhoenixBasic/
