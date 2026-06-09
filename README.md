@@ -1,4 +1,4 @@
-# GFA Basic 3.5 — Émulateur pour Atari ST
+# Reverse engineering de l'interpreteur GFA Basic 3.5 pour Atari ST
 
 Interpréteur compatible **GFA Basic 3.5 pour Atari ST**, écrit en **C ANSI (C89)**.
 
