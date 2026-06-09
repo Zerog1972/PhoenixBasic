@@ -1176,6 +1176,54 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        case OP_PRINT_CHAN:
+            /* Stack: [channel] [value] ; write value to file channel */
+            if (rt->sp >= 2) {
+                gfa_value *chan_val;
+                int channel;
+                v1 = gfa_value_pop(rt);  /* value */
+                chan_val = gfa_value_pop(rt);  /* channel */
+                if (v1 != NULL && chan_val != NULL) {
+                    channel = (int)gfa_value_to_long(chan_val);
+                    if (v1->type == GFA_VAL_STRING) {
+                        gfa_print_channel(channel,
+                            v1->data.s ? v1->data.s : "");
+                    } else {
+                        char *s;
+                        s = gfa_str_float(gfa_value_to_float(v1));
+                        gfa_print_channel(channel, s);
+                        os_mem_free(s);
+                    }
+                    gfa_print_channel(channel, "\n");
+                }
+                if (v1) os_mem_free(v1);
+                if (chan_val) os_mem_free(chan_val);
+            }
+            break;
+
+        case OP_INPUT_FILE:
+            /* Stack: [channel] ; pop channel, read from file into var */
+            if (rt->sp > 0) {
+                gfa_value *chan_val;
+                int channel;
+                var = (gfa_variable *)inst->operand.ptr_val;
+                chan_val = gfa_value_pop(rt);
+                if (chan_val != NULL && var != NULL) {
+                    char line[256];
+                    channel = (int)gfa_value_to_long(chan_val);
+                    if (gfa_input_channel(channel, line,
+                            (int)sizeof(line)) >= 0) {
+                        if (var->type == GFA_VAR_STRING) {
+                            gfa_var_set_from_string(var, line);
+                        } else {
+                            gfa_var_set_from_float(var, gfa_val(line));
+                        }
+                    }
+                }
+                if (chan_val) os_mem_free(chan_val);
+            }
+            break;
+
         case OP_CLS:
             os_con_clear();
             rt->cursor_x = 1;

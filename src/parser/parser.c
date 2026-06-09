@@ -1080,6 +1080,7 @@ static ast_node *parse_print(gfa_parser *parser)
     if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
         gfa_lexer_next(parser->lexer);
         ast_add_child(node, parse_expression(parser));  /* canal */
+        node->value.int_val = 1;  /* flag: canal present */
         if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
             gfa_lexer_next(parser->lexer);
         }
@@ -1152,6 +1153,7 @@ static ast_node *parse_input(gfa_parser *parser)
     if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
         gfa_lexer_next(parser->lexer);
         ast_add_child(node, parse_expression(parser));
+        node->value.int_val = 1;  /* flag: canal present */
         if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
             gfa_lexer_next(parser->lexer);
         }

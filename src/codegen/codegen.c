@@ -445,12 +445,27 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     /* --- INPUT (C5) --- */
     case AST_INPUT:
         { ast_node *arg = node->left;
-          while (arg) {
-              if (arg->has_ident && arg->value.ident) {
-                  gfa_variable *var = cg_resolve_var(ctx, arg->value.ident);
-                  cg_emit_ptr(ctx, OP_INPUT, (void *)var);
+          int has_channel = (node->value.int_val != 0) ? 1 : 0;
+          if (has_channel && arg) {
+              /* Skip channel child, emit OP_INPUT_FILE for each var */
+              arg = arg->right;
+              while (arg) {
+                  if (arg->has_ident && arg->value.ident) {
+                      gfa_variable *var = cg_resolve_var(ctx, arg->value.ident);
+                      cg_expression(ctx, node->left);  /* push channel */
+                      cg_emit_ptr(ctx, OP_INPUT_FILE, (void *)var);
+                  }
+                  arg = arg->right;
               }
-              arg = arg->right; } }
+          } else {
+              while (arg) {
+                  if (arg->has_ident && arg->value.ident) {
+                      gfa_variable *var = cg_resolve_var(ctx, arg->value.ident);
+                      cg_emit_ptr(ctx, OP_INPUT, (void *)var);
+                  }
+                  arg = arg->right;
+              }
+          } }
         break;
 
     case AST_LINE_INPUT:
@@ -757,10 +772,25 @@ static void cg_select(codegen_ctx *ctx, ast_node *node)
 static void cg_print(codegen_ctx *ctx, ast_node *node)
 {
     ast_node *arg;
+    int has_channel;
     if (!node) return;
+    has_channel = (node->value.int_val != 0) ? 1 : 0;
     arg = node->left;
-    while (arg) { cg_expression(ctx, arg); cg_emit(ctx, OP_PRINT); arg = arg->right; }
-    if (!node->left) { cg_emit_str(ctx, OP_PUSH_STRING, ""); cg_emit(ctx, OP_PRINT); }
+    if (has_channel) {
+        /* PRINT #n : first child = channel, rest = expressions */
+        if (arg) {
+            ast_node *expr = arg->right;
+            while (expr) {
+                cg_expression(ctx, arg);    /* push channel */
+                cg_expression(ctx, expr);   /* push value */
+                cg_emit(ctx, OP_PRINT_CHAN);
+                expr = expr->right;
+            }
+        }
+    } else {
+        while (arg) { cg_expression(ctx, arg); cg_emit(ctx, OP_PRINT); arg = arg->right; }
+        if (!node->left) { cg_emit_str(ctx, OP_PUSH_STRING, ""); cg_emit(ctx, OP_PRINT); }
+    }
 }
 
 static void cg_call(codegen_ctx *ctx, ast_node *node)
