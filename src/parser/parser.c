@@ -676,6 +676,14 @@ static ast_node *parse_statement(gfa_parser *parser)
                     if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN) {
                         gfa_lexer_next(parser->lexer);
                     }
+                    /* Apres ident(...), verifier si c'est un tableau : ident(...) = expr */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_EQ) {
+                        assign = ast_create(AST_ASSIGN);
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_child(assign, call);
+                        ast_add_child(assign, parse_expression(parser));
+                        return assign;
+                    }
                     return call;
                 }
 

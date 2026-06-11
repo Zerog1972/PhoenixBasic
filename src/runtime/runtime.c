@@ -354,6 +354,62 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        case OP_ARRAY_LOAD:
+            /* Stack: [indices...] ; pop indices, read array element, push value */
+            var = (gfa_variable *)inst->operand.ptr_val;
+            if (var != NULL && var->type == GFA_VAR_ARRAY && var->value.arr.data) {
+                int ndim = var->value.arr.num_dims;
+                if (ndim >= 1 && rt->sp >= ndim) {
+                    int indices[7];
+                    int di;
+                    double *base;
+                    long flat_index = 0;
+                    int stride = 1;
+                    for (di = ndim - 1; di >= 0; di--) {
+                        gfa_value *idx = gfa_value_pop(rt);
+                        if (idx) {
+                            indices[di] = (int)gfa_value_to_long(idx);
+                            os_mem_free(idx);
+                        }
+                        flat_index += indices[di] * stride;
+                        stride *= var->value.arr.dim_sizes[di];
+                    }
+                    base = (double *)var->value.arr.data;
+                    gfa_value_push_float(rt, base[flat_index]);
+                }
+            }
+            break;
+
+        case OP_ARRAY_STORE:
+            /* Stack: [indices...] [value] ; pop value, indices, store */
+            var = (gfa_variable *)inst->operand.ptr_val;
+            if (var != NULL && var->type == GFA_VAR_ARRAY && var->value.arr.data) {
+                int ndim = var->value.arr.num_dims;
+                if (ndim >= 1 && rt->sp >= ndim + 1) {
+                    int indices[7];
+                    int di;
+                    double *base;
+                    long flat_index = 0;
+                    int stride = 1;
+                    gfa_value *val = gfa_value_pop(rt);
+                    for (di = ndim - 1; di >= 0; di--) {
+                        gfa_value *idx = gfa_value_pop(rt);
+                        if (idx) {
+                            indices[di] = (int)gfa_value_to_long(idx);
+                            os_mem_free(idx);
+                        }
+                        flat_index += indices[di] * stride;
+                        stride *= var->value.arr.dim_sizes[di];
+                    }
+                    base = (double *)var->value.arr.data;
+                    if (val) {
+                        base[flat_index] = gfa_value_to_float(val);
+                        os_mem_free(val);
+                    }
+                }
+            }
+            break;
+
         case OP_DUP:
             if (rt->sp > 0 && rt->sp < GFA_VALUE_STACK_SIZE) {
                 rt->value_stack[rt->sp] = rt->value_stack[rt->sp - 1];

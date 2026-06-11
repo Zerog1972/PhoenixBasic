@@ -498,7 +498,7 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
               os_int32 dims[7]; int ndim = 0;
               ast_node *dim_node = name_node->right;
               while (dim_node && ndim < 7) {
-                  dims[ndim++] = dim_node->value.int_val;
+                  dims[ndim++] = (os_int32)dim_node->value.float_val;
                   dim_node = dim_node->right;
               }
               if (ndim > 0)
@@ -663,6 +663,20 @@ static void cg_assign(codegen_ctx *ctx, ast_node *node)
     target = node->left;
     value = (target) ? target->right : NULL;
     if (!target) return;
+
+    /* Array assignment: a(indices) = expr */
+    if (target->type == AST_CALL && target->has_ident && target->value.ident) {
+        gfa_variable *var = cg_resolve_var(ctx, target->value.ident);
+        if (var && var->type == GFA_VAR_ARRAY) {
+            int i;
+            for (i = 0; i < target->arg_count; i++)
+                cg_expression(ctx, target->args[i]);
+            cg_expression(ctx, value);
+            cg_emit_ptr(ctx, OP_ARRAY_STORE, (void *)var);
+            return;
+        }
+    }
+
     cg_expression(ctx, value);
     if (target->has_ident && target->value.ident) {
         gfa_variable *var = cg_resolve_var(ctx, target->value.ident);
@@ -802,11 +816,16 @@ static void cg_call(codegen_ctx *ctx, ast_node *node)
             cg_expression(ctx, node->args[i]);
     }
     if (node->has_ident && node->value.ident) {
-        /* User-defined function: emit OP_CALL with label resolution */
-        int str_idx = gfa_bytecode_add_string(ctx->bc, node->value.ident);
-        int instr_idx = cg_emit_int(ctx, OP_CALL, -1);
-        ctx->bc->code[instr_idx].has_operand2 = 1;
-        ctx->bc->code[instr_idx].operand2.int_val2 = str_idx;
+        /* User-defined function OR array access */
+        gfa_variable *var = cg_resolve_var(ctx, node->value.ident);
+        if (var && var->type == GFA_VAR_ARRAY) {
+            cg_emit_ptr(ctx, OP_ARRAY_LOAD, (void *)var);
+        } else {
+            int str_idx = gfa_bytecode_add_string(ctx->bc, node->value.ident);
+            int instr_idx = cg_emit_int(ctx, OP_CALL, -1);
+            ctx->bc->code[instr_idx].has_operand2 = 1;
+            ctx->bc->code[instr_idx].operand2.int_val2 = str_idx;
+        }
     } else {
         /* Built-in function */
         cg_emit_int(ctx, OP_CALL_BUILTIN, (os_int32)node->value.int_val);

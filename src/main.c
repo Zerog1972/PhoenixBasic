@@ -17,6 +17,7 @@
 #include <termios.h>
 
 #include "os_layer.h"
+#include "keywords.h"
 #include "parser.h"
 #include "codegen.h"
 #include "runtime.h"
@@ -193,13 +194,118 @@ static void delete_lines(int from, int to)
 }
 
 /* Lister les lignes */
+static int is_block_opener(const char *line)
+{
+    int n;
+    if (strnicmp(line, "IF", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
+    if (strnicmp(line, "FOR", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) return 1;
+    if (strnicmp(line, "WHILE", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp(line, "REPEAT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp(line, "DO", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
+    if (strnicmp(line, "SELECT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp(line, "PROCEDURE", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
+    if (strnicmp(line, "FUNCTION", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) return 1;
+    if (strnicmp(line, "DEFFN", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp(line, "CASE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp(line, "DEFAULT", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
+    if (strnicmp(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    return 0;
+}
+
+static int is_block_closer(const char *line)
+{
+    if (strnicmp(line, "ENDIF", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp(line, "NEXT", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp(line, "WEND", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp(line, "UNTIL", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp(line, "LOOP", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp(line, "ENDSELECT", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
+    if (strnicmp(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp(line, "RETURN", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp(line, "ENDFUNC", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
+    return 0;
+}
+
+/* Formateur : mots-cles en majuscules */
+static void format_line(char *buffer, int bufsize)
+{
+    char in[MAX_LINE_LEN];
+    int i, o;
+    char kw[MAX_LINE_LEN];
+    int kw_len;
+
+    strncpy(in, buffer, (size_t)bufsize - 1);
+    in[bufsize - 1] = '\0';
+    i = 0; o = 0;
+    while (in[i] != '\0' && o < bufsize - 1) {
+        if (in[i] == '"') {
+            buffer[o++] = in[i++];
+            while (in[i] != '\0' && o < bufsize - 1) {
+                buffer[o++] = in[i];
+                if (in[i] == '"' && (i == 0 || in[i-1] != '\\')) { i++; break; }
+                i++;
+            }
+            continue;
+        }
+        if (isalpha((unsigned char)in[i]) || in[i] == '_') {
+            kw_len = 0;
+            while ((isalnum((unsigned char)in[i]) || in[i] == '_' ||
+                    in[i] == '$' || in[i] == '%' || in[i] == '&' ||
+                    in[i] == '!' || in[i] == '|' || in[i] == '#') &&
+                   kw_len < MAX_LINE_LEN - 1)
+                kw[kw_len++] = in[i++];
+            kw[kw_len] = '\0';
+            if (gfa_keyword_lookup(kw) != TOK_IDENTIFIER) {
+                int j;
+                for (j = 0; j < kw_len && o < bufsize - 1; j++)
+                    buffer[o++] = toupper((unsigned char)kw[j]);
+            } else {
+                int j;
+                for (j = 0; j < kw_len && o < bufsize - 1; j++)
+                    buffer[o++] = kw[j];
+            }
+            continue;
+        }
+        buffer[o++] = in[i++];
+    }
+    buffer[o] = '\0';
+}
+
+/* Lister avec indentation */
 static void list_lines(int from, int to)
 {
-    int i;
+    int i, level;
     if (from < 1) from = 1;
     if (to > g_line_count) to = g_line_count;
-    for (i = from - 1; i < to && i < g_line_count; i++)
-        printf("%d] %s\n", i + 1, g_lines[i].text);
+    level = 0;
+    for (i = from - 1; i < to && i < g_line_count; i++) {
+        const char *text = g_lines[i].text;
+        int indent = level;
+        int ws;
+        while (*text == ' ') text++;
+        if (*text == '\0') { printf("\n"); continue; }
+        {
+            char fk[64];
+            int fi = 0;
+            while (isalpha((unsigned char)text[fi]) && fi < 63)
+                fk[fi++] = toupper((unsigned char)text[fi]);
+            fk[fi] = '\0';
+            if (is_block_closer(fk) && indent > 0) indent--;
+        }
+        printf("%d] ", i + 1);
+        for (ws = 0; ws < indent * 2; ws++) putchar(' ');
+        printf("%s\n", text);
+        {
+            char fk[64];
+            int fi = 0;
+            while (isalpha((unsigned char)text[fi]) && fi < 63)
+                fk[fi++] = toupper((unsigned char)text[fi]);
+            fk[fi] = '\0';
+            if (is_block_closer(fk)) level--;
+            if (level < 0) level = 0;
+            if (is_block_opener(fk)) level++;
+        }
+    }
 }
 
 /* Assembler le programme en un buffer source */
@@ -243,6 +349,7 @@ static int load_file_into_editor(const char *filename)
                 text_buf[len] = '\0';
                 strncpy(g_lines[g_line_count].text, text_buf, MAX_LINE_LEN - 1);
                 g_lines[g_line_count].text[MAX_LINE_LEN - 1] = '\0';
+                format_line(g_lines[g_line_count].text, MAX_LINE_LEN);
                 g_line_count++;
             }
         }
@@ -560,6 +667,7 @@ static void repl_mode(void)
                 line_editor(buf, MAX_LINE_LEN);
                 if (buf[0] != '\0') {
                     strncpy(g_lines[n - 1].text, buf, MAX_LINE_LEN - 1);
+                    format_line(g_lines[n - 1].text, MAX_LINE_LEN);
                     g_lines[n - 1].text[MAX_LINE_LEN - 1] = '\0';
                     edited = 1;
                     printf("Line %d updated.\n", n);
@@ -619,6 +727,7 @@ static void repl_mode(void)
                             g_line_count--;
                         } else {
                             strncpy(g_lines[n - 1].text, buf, MAX_LINE_LEN - 1);
+                            format_line(g_lines[n - 1].text, MAX_LINE_LEN);
                             g_lines[n - 1].text[MAX_LINE_LEN - 1] = '\0';
                         }
                     }
@@ -728,6 +837,7 @@ static void repl_mode(void)
             if (g_line_count < MAX_LINES) {
                 strncpy(g_lines[g_line_count].text, line, MAX_LINE_LEN - 1);
                 g_lines[g_line_count].text[MAX_LINE_LEN - 1] = '\0';
+                format_line(g_lines[g_line_count].text, MAX_LINE_LEN);
                 g_line_count++;
             } else {
                 printf("Program full.\n");
