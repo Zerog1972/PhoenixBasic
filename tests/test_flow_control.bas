@@ -155,6 +155,117 @@ check_num = 10
 GOSUB check
 
 ' ============================================================
+' 11. FOR imbrique (table de multiplication)
+' ============================================================
+sum = 0
+FOR i = 1 TO 3
+  FOR j = 1 TO 4
+    sum = sum + i * j
+  NEXT j
+NEXT i
+' sum = 1*1+1*2+1*3+1*4 + 2*1+...+3*4 = 10+20+30 = 60
+check_cond = sum = 60
+check_num = 11
+GOSUB check
+
+' ============================================================
+' 12. WHILE imbrique (recherche de paires)
+' ============================================================
+found = 0
+i = 1
+WHILE i <= 4 AND found = 0
+  j = 1
+  WHILE j <= 4 AND found = 0
+    IF i * j = 6
+      found = i * 10 + j
+    ENDIF
+    j = j + 1
+  WEND
+  i = i + 1
+WEND
+' Premiere paire i*j=6 est i=2,j=3 → found=23
+check_cond = found = 23
+check_num = 12
+GOSUB check
+
+' ============================================================
+' 13. REPEAT/UNTIL imbrique avec FOR
+' ============================================================
+sum = 0
+FOR i = 1 TO 3
+  j = 1
+  REPEAT
+    sum = sum + i + j
+    j = j + 1
+  UNTIL j > 2
+NEXT i
+' i=1: j=1,2 → sum=1+1+1+2=5
+' i=2: j=1,2 → sum=5+2+1+2+2=12
+' i=3: j=1,2 → sum=12+3+1+3+2=21
+check_cond = sum = 21
+check_num = 13
+GOSUB check
+
+' ============================================================
+' 14. IF imbrique dans FOR
+' ============================================================
+nb_pairs = 0
+FOR i = 1 TO 10
+  IF i MOD 2 = 0
+    nb_pairs = nb_pairs + 1
+  ENDIF
+NEXT i
+' Pairs de 1 a 10 : 2,4,6,8,10 = 5
+check_cond = nb_pairs = 5
+check_num = 14
+GOSUB check
+
+' ============================================================
+' 15. SELECT/CASE dans FOR
+' ============================================================
+sum_pair = 0
+sum_impair = 0
+FOR i = 1 TO 5
+  SELECT i
+    CASE 1
+      sum_impair = sum_impair + i
+    CASE 2
+      sum_pair = sum_pair + i
+    CASE 3
+      sum_impair = sum_impair + i
+    CASE 4
+      sum_pair = sum_pair + i
+    CASE 5
+      sum_impair = sum_impair + i
+  ENDSELECT
+NEXT i
+' Pairs : 2+4=6, Impairs : 1+3+5=9
+check_cond = sum_pair = 6 AND sum_impair = 9
+check_num = 15
+GOSUB check
+
+' ============================================================
+' 16. FOR imbrique sur 3 niveaux
+' ============================================================
+sum = 0
+FOR i = 1 TO 2
+  FOR j = 1 TO 3
+    FOR k = 1 TO 2
+      sum = sum + i + j + k
+    NEXT k
+  NEXT j
+NEXT i
+' Calcul manuel : pour chaque i,j,k, somme i+j+k
+' i=1: j=1→k=1,2: 3+4=7, j=2→k=1,2: 4+5=9, j=3→k=1,2: 5+6=11
+'      total i=1 = 7+9+11 = 27
+' i=2: j=1→k=1,2: 4+5=9, j=2→k=1,2: 5+6=11, j=3→k=1,2: 6+7=13
+'      total i=2 = 9+11+13 = 33
+' Total = 27+33 = 60
+check_cond = sum = 60
+check_num = 16
+GOSUB check
+
+' ============================================================
 ' Resume
 ' ============================================================
 PRINT ""
