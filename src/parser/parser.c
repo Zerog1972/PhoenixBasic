@@ -688,6 +688,31 @@ static ast_node *parse_statement(gfa_parser *parser)
                     return call;
                 }
 
+                /* Appel de PROCEDURE sans parentheses : nom arg1, arg2 */
+                if (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_REM &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_COLON) {
+                    ast_node *call;
+                    call = ast_create(AST_CALL);
+                    call->value.ident = ident->value.ident;
+                    call->has_ident = ident->has_ident;
+                    ident->has_ident = 0;
+                    free(ident);
+                    while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                           gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                           gfa_lexer_current_token(parser->lexer) != TOK_REM &&
+                           gfa_lexer_current_token(parser->lexer) != TOK_COLON) {
+                        ast_add_arg(call, parse_expression(parser));
+                        if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                            gfa_lexer_next(parser->lexer);
+                        } else {
+                            break;
+                        }
+                    }
+                    return call;
+                }
+
                 return ident;
             }
 
