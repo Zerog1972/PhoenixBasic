@@ -42,6 +42,7 @@ static ast_node *parse_function(gfa_parser *parser);
 static ast_node *parse_deffn(gfa_parser *parser);
 static ast_node *parse_sound_stmt(gfa_parser *parser);
 static ast_node *parse_graphics(gfa_parser *parser);
+static ast_node *parse_comparison(gfa_parser *parser);
 static ast_node *parse_expression(gfa_parser *parser);
 static ast_node *parse_simple_expr(gfa_parser *parser);
 static ast_node *parse_term(gfa_parser *parser);
@@ -1563,7 +1564,7 @@ static ast_node *parse_graphics(gfa_parser *parser)
 /*
  * expression := simple_expr (('='|'<'|'>'|'<='|'>='|'<>') simple_expr)*
  */
-static ast_node *parse_expression(gfa_parser *parser)
+static ast_node *parse_comparison(gfa_parser *parser)
 {
     ast_node *left;
     gfa_token_type op;
@@ -1588,7 +1589,37 @@ static ast_node *parse_expression(gfa_parser *parser)
 }
 
 /*
- * simple_expr := term (('+'|'-'|OR|XOR|EQV|IMP|AND) term)*
+ * expression := comparison ( (AND|OR|XOR|EQV|IMP) comparison )*
+ */
+static ast_node *parse_expression(gfa_parser *parser)
+{
+    ast_node *left;
+    gfa_token_type op;
+
+    left = parse_comparison(parser);
+
+    for (;;) {
+        op = gfa_lexer_current_token(parser->lexer);
+        if (op == TOK_AND_OP || op == TOK_OR_OP ||
+            op == TOK_XOR_OP || op == TOK_EQV_OP ||
+            op == TOK_IMP_OP) {
+            ast_node *node;
+            gfa_lexer_next(parser->lexer);
+            node = ast_create(AST_ASSIGN);
+            ast_add_child(node, left);
+            ast_add_child(node, parse_comparison(parser));
+            node->value.int_val = (long)op;
+            left = node;
+            continue;
+        }
+        break;
+    }
+
+    return left;
+}
+
+/*
+ * simple_expr := term (('+'|'-'|'&') term)*
  */
 static ast_node *parse_simple_expr(gfa_parser *parser)
 {
@@ -1600,9 +1631,7 @@ static ast_node *parse_simple_expr(gfa_parser *parser)
     for (;;) {
         op = gfa_lexer_current_token(parser->lexer);
         if (op == TOK_PLUS || op == TOK_MINUS ||
-            op == TOK_OR_OP || op == TOK_XOR_OP ||
-            op == TOK_EQV_OP || op == TOK_IMP_OP ||
-            op == TOK_AND_OP || op == TOK_AMPERSAND) {
+            op == TOK_AMPERSAND) {
             ast_node *node;
             gfa_lexer_next(parser->lexer);
             node = ast_create(AST_ASSIGN);

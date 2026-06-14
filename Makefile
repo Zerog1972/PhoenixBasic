@@ -67,8 +67,20 @@ test-parser: $(OBJS) $(TESTDIR)/test_parser.c
 	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_parser $(TESTDIR)/test_parser.c $(OBJS) -lm
 	@$(BUILDDIR)/test_parser
 
-test-all: test-os test-rt test-lexer test-parser
+test-tos-gfx: $(OBJS) $(TESTDIR)/test_tos_gfx.c
+	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_tos_gfx $(TESTDIR)/test_tos_gfx.c $(OBJS) -lm
+	@$(BUILDDIR)/test_tos_gfx
+
+test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas
 	@echo "=== All tests done ==="
+
+test-bas: $(APP)
+	@echo "=== Running BASIC tests ==="
+	for f in $(TESTDIR)/test_*.bas; do \
+		echo "--- $$(basename $$f) ---"; \
+		$(APP) $$f || exit 1; \
+	done
+	@echo "=== All BASIC tests done ==="
 
 clean:
 	rm -rf $(BUILDDIR)
