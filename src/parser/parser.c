@@ -1825,6 +1825,15 @@ static ast_node *parse_primary(gfa_parser *parser)
                 return node;
             }
 
+        case TOK_HASH:
+            {
+                /* #n : canal fichier dans une expression (ex: EOF(#1)) */
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);  /* consommer # */
+                node = parse_expression(parser);  /* le numero du canal */
+                return node;
+            }
+
         case TOK_FN:
             {
                 ast_node *call;
