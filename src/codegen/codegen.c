@@ -285,6 +285,10 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_END:         cg_emit(ctx, OP_END); break;
     case AST_STOP:        cg_emit(ctx, OP_STOP); break;
     case AST_BEEP:        cg_emit(ctx, OP_BEEP); break;
+    case AST_ERROR:
+        if (node->left) cg_expression(ctx, node->left);
+        cg_emit(ctx, OP_ERROR);
+        break;
     case AST_TRON:        cg_emit(ctx, OP_TRON); break;
     case AST_TROFF:       cg_emit(ctx, OP_TROFF); break;
     case AST_BLOAD:
@@ -588,7 +592,7 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_REM: case AST_LINE_NUMBER: case AST_ERASE:
     case AST_CLEAR: case AST_OPTION_BASE: case AST_QUIT:
     case AST_DO_LOOP: case AST_EXIT_IF: case AST_ON_GOTO_GOSUB:
-    case AST_ON_BREAK: case AST_ERROR:
+    case AST_ON_BREAK:
     case AST_OPENW: case AST_CLOSEW:
     case AST_DEFBIT: case AST_DEFBYT: case AST_DEFWRD:
     case AST_DEFNUM: case AST_DEFFLT: case AST_DEFSTR: case AST_DEFDBL:

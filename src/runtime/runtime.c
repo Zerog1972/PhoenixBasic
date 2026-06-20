@@ -1631,6 +1631,74 @@ static int execute_instruction(gfa_runtime *rt)
             rt->trace_on = 0;
             break;
 
+        case OP_ERROR:
+            /* Stack: [error_code] ; raise error */
+            if (rt->sp > 0) {
+                v1 = gfa_value_pop(rt);
+                if (v1) {
+                    gfa_error_raise((int)gfa_value_to_long(v1));
+                    os_mem_free(v1);
+                }
+            }
+            break;
+
+        case OP_GEMDOS:
+            /* Stack: [fn] [arg1] [arg2] ; call GEMDOS */
+            if (rt->sp >= 3) {
+                os_int32 fn, arg1, arg2;
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                v0 = gfa_value_pop(rt);
+                if (v0 && v1 && v2) {
+                    fn = gfa_value_to_long(v0);
+                    arg1 = gfa_value_to_long(v1);
+                    arg2 = gfa_value_to_long(v2);
+                    gfa_value_push_long(rt, gfa_gemdos(fn, arg1, arg2));
+                }
+                if (v0) os_mem_free(v0);
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+            }
+            break;
+
+        case OP_BIOS:
+            /* Stack: [fn] [arg1] [arg2] ; call BIOS */
+            if (rt->sp >= 3) {
+                os_int32 fn, arg1, arg2;
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                v0 = gfa_value_pop(rt);
+                if (v0 && v1 && v2) {
+                    fn = gfa_value_to_long(v0);
+                    arg1 = gfa_value_to_long(v1);
+                    arg2 = gfa_value_to_long(v2);
+                    gfa_value_push_long(rt, gfa_bios(fn, arg1, arg2));
+                }
+                if (v0) os_mem_free(v0);
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+            }
+            break;
+
+        case OP_XBIOS:
+            /* Stack: [fn] [arg1] [arg2] ; call XBIOS */
+            if (rt->sp >= 3) {
+                os_int32 fn, arg1, arg2;
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                v0 = gfa_value_pop(rt);
+                if (v0 && v1 && v2) {
+                    fn = gfa_value_to_long(v0);
+                    arg1 = gfa_value_to_long(v1);
+                    arg2 = gfa_value_to_long(v2);
+                    gfa_value_push_long(rt, gfa_xbios(fn, arg1, arg2));
+                }
+                if (v0) os_mem_free(v0);
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+            }
+            break;
+
         case OP_LABEL:
         case OP_LINE_NUM:
             /* Marqueurs, ne rien faire */
