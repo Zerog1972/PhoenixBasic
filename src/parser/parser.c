@@ -417,8 +417,18 @@ static ast_node *parse_statement(gfa_parser *parser)
                 return node;
             }
         case TOK_RESTORE:
-            gfa_lexer_next(parser->lexer);
-            return ast_create(AST_RESTORE);
+            {
+                ast_node *node;
+                node = ast_create(AST_RESTORE);
+                gfa_lexer_next(parser->lexer);  /* RESTORE */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                    ast_add_child(node,
+                        ast_create_ident(AST_ASSIGN,
+                            parser->lexer->current.value.ident_name));
+                    gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
 
         case TOK_LOCAL:
             {
