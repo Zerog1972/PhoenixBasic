@@ -1059,7 +1059,11 @@ static ast_node *parse_select(gfa_parser *parser)
             ast_node *case_node;
             case_node = ast_create(AST_CASE);
             gfa_lexer_next(parser->lexer);
-            ast_set_cond(case_node, parse_expression(parser));            /* Corps du case */
+            ast_set_cond(case_node, parse_expression(parser));
+            if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                gfa_lexer_next(parser->lexer);  /* : optionnel apres CASE */
+            }
+            /* Corps du case */
             {
                 ast_node *case_body;
                 case_body = ast_create(AST_STATEMENT_LIST);
@@ -1079,7 +1083,11 @@ static ast_node *parse_select(gfa_parser *parser)
         if (tok == TOK_DEFAULT) {
             ast_node *def_node;
             def_node = ast_create(AST_DEFAULT_CASE);
-            gfa_lexer_next(parser->lexer);            {
+            gfa_lexer_next(parser->lexer);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                gfa_lexer_next(parser->lexer);  /* : optionnel apres DEFAULT */
+            }
+            {
                 ast_node *def_body;
                 def_body = ast_create(AST_STATEMENT_LIST);
                 while (gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
