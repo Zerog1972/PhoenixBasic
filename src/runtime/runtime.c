@@ -1415,6 +1415,7 @@ static int execute_instruction(gfa_runtime *rt)
                     bg = v2 ? (int)gfa_value_to_long(v2) : 0;
                 } else bg = 0;
                 gfx_color(fg, bg);
+                gfx_update();
                 rt->current_color = fg;
                 if (v1) os_mem_free(v1);
                 if (v2) os_mem_free(v2);
@@ -1449,6 +1450,7 @@ static int execute_instruction(gfa_runtime *rt)
                             gfx_fill_circle(x1, y1, r);
                         else
                             gfx_circle(x1, y1, r);
+                        gfx_update();
                     }
                 } else {
                     if (rt->sp >= 4) {
@@ -1461,12 +1463,14 @@ static int execute_instruction(gfa_runtime *rt)
                         if (v3) x2 = (int)gfa_value_to_long(v3);
                         if (v4) y2 = (int)gfa_value_to_long(v4);
                     }
-                    if (inst->opcode == OP_LINE_GFX)
+                    if (inst->opcode == OP_LINE_GFX) {
                         gfx_line(x1, y1, x2, y2);
-                    else if (inst->opcode == OP_PBOX_GFX)
+                    } else if (inst->opcode == OP_PBOX_GFX) {
                         gfx_fill_box(x1, y1, x2, y2);
-                    else
+                    } else {
                         gfx_box(x1, y1, x2, y2);
+                    }
+                    gfx_update();
                 }
                 if (v1) os_mem_free(v1);
                 if (v2) os_mem_free(v2);
