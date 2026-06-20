@@ -41,7 +41,7 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 
 | Catégorie | Détail |
 |-----------|--------|
-| **Contrôle de flux** | IF/THEN/ELSE/ENDIF (inline + multi-lignes), FOR/NEXT (STEP), WHILE/WEND, REPEAT/UNTIL, SELECT/CASE, GOTO/GOSUB/RETURN/@, DO/LOOP |
+| **Contrôle de flux** | IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, WHILE/WEND, REPEAT/UNTIL, SELECT/CASE, GOTO/GOSUB/RETURN/@, DO/LOOP, ON x GOTO/GOSUB |
 | **Procédures/Fonctions** | PROCEDURE, FUNCTION, RETURN expr, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`) |
 | **Tableaux 1D** | DIM, `a(i)=expr`, `PRINT a(i)`, OP_ARRAY_LOAD/STORE |
 | **Opérateurs** | `+` `-` `*` `/` `^` `=` `<>` `<` `>` `<=` `>=` AND OR XOR NOT EQV IMP MOD DIV |
@@ -49,7 +49,7 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 | **Chaînes** | 18 fonctions : LEN, ASC, CHR$, VAL, LEFT$/RIGHT$/MID$, INSTR, UPPER$/LCASE$, TRIM$, STR$/BIN$/HEX$/OCT$, SPACE$ |
 | **Entrées/Sorties** | PRINT, PRINT #, INPUT, INPUT #, LINE INPUT, INKEY$, CLS, LOCATE |
 | **Fichiers** | OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#/INPUT# |
-    | **Mémoire** | PEEK/POKE/DPEEK/LPEEK, DIM/ERASE/CLEAR, DATA/READ/RESTORE, MALLOC/MFREE, BLOAD/BSAVE/BGET/BPUT |
+| **Mémoire** | PEEK/POKE/DPEEK/LPEEK, DIM/ERASE/CLEAR, DATA/READ/RESTORE, MALLOC/MFREE, BLOAD/BSAVE/BGET/BPUT |
 | **Son** | BEEP, SOUND ch, freq, dur, vol, env |
 | **Événements** | EVERY, AFTER, ON ERROR, ON BREAK, ERROR, ERR |
 | **Édition** | LIST avec indentation, EDIT en place (← → Home End Bksp Del), INSERT, DELETE, LOAD/SAVE |
@@ -75,8 +75,8 @@ main.c ──┬── lexer/     (490 keywords, tokens, EOL)
 
 | Limitation | Détail |
 |-----------|--------|
-| Mots-clés comme noms | `add`, `val`, `double`, `inc` réservés (lexer non contextuel) |
-| Format flottant | IEEE-754, pas le format GFA 8 octets |
-| GEM AES complet | Menus, fenêtres, événements souris partiellement implémentés |
-| RESTORE label | Parse OK mais restauration DATA globale (label ignoré) |
-| ON x GOTO/GOSUB | Parse OK, non implémenté dans le runtime |
+| Mots-clés comme noms | Certains mots (`add`, `val`, `double`, `inc`) sont réservés car le lexer n'est pas contextuel |
+| Format flottant | IEEE-754 (double précision), pas le format GFA propriétaire 8 octets |
+| GEM AES | Fonctions de base (APPL_INIT, FORM_ALERT…) ok. Menus, fenêtres et événements souris partiellement implémentés |
+| RESTORE label | Parse OK mais la restauration est globale (le label est ignoré au runtime) |
+| `:` séparateur | Non supporté — une ligne = une instruction (conforme au vrai GFA Basic 3.5) |
