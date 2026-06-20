@@ -380,7 +380,6 @@ static ast_node *parse_statement(gfa_parser *parser)
                 ast_node *node;
                 node = ast_create(AST_CLOSEW);
                 gfa_lexer_next(parser->lexer);
-                ast_add_child(node, parse_expression(parser));
                 return node;
             }
 

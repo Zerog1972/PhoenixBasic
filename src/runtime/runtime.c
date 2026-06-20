@@ -1403,6 +1403,16 @@ static int execute_instruction(gfa_runtime *rt)
             rt->cursor_y = 1;
             break;
 
+        case OP_OPENW:
+            /* OPENW n : open window n (clear screen) */
+            gfx_clear();
+            gfx_update();
+            break;
+
+        case OP_CLOSEW:
+            /* CLOSEW : no-op in SDL2 */
+            break;
+
         case OP_COLOR:
             /* COLOR fg [, bg] : args on stack */
             if (rt->sp >= 1) {
