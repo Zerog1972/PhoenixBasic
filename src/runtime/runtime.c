@@ -13,6 +13,7 @@
 #include "events.h"
 #include "sound.h"
 #include "tos.h"
+#include "gfx.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -1405,9 +1406,18 @@ static int execute_instruction(gfa_runtime *rt)
         case OP_COLOR:
             /* COLOR fg [, bg] : args on stack */
             if (rt->sp >= 1) {
+                int fg, bg;
+                v2 = NULL;
                 v1 = gfa_value_pop(rt);
-                if (v1) { rt->current_color = (int)gfa_value_to_long(v1); os_mem_free(v1); }
-                if (rt->sp > 0) { v2 = gfa_value_pop(rt); if (v2) os_mem_free(v2); }
+                fg = v1 ? (int)gfa_value_to_long(v1) : 1;
+                if (rt->sp > 0) {
+                    v2 = gfa_value_pop(rt);
+                    bg = v2 ? (int)gfa_value_to_long(v2) : 0;
+                } else bg = 0;
+                gfx_color(fg, bg);
+                rt->current_color = fg;
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
             }
             break;
 
@@ -1415,28 +1425,53 @@ static int execute_instruction(gfa_runtime *rt)
         case OP_BOX_GFX:
         case OP_PBOX_GFX:
         case OP_CIRCLE_GFX:
-            /* Graphics: params x1,y1,x2,y2 or x,y,r on stack. Emit ANSI/placeholder */
+            /* Graphics via SDL2 */
             {
-                int x1, y1, x2, y2;
-                (void)x1; (void)y1; (void)x2; (void)y2;
-                x1 = y1 = x2 = y2 = 0;
-                if (rt->sp >= 2) {
-                    v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt);
-                    if (v1) { x1 = (int)gfa_value_to_long(v1); os_mem_free(v1); }
-                    if (v2) { y1 = (int)gfa_value_to_long(v2); os_mem_free(v2); }
+                int x1, y1, x2, y2, r;
+                gfa_value *v3, *v4;
+                v1 = v2 = v3 = v4 = NULL;
+                x1 = y1 = x2 = y2 = r = 0;
+                if (inst->opcode == OP_CIRCLE_GFX) {
+                    /* CIRCLE x,y,r [fill] */
+                    if (rt->sp >= 3) {
+                        v3 = gfa_value_pop(rt);
+                        v2 = gfa_value_pop(rt);
+                        v1 = gfa_value_pop(rt);
+                        if (v1) x1 = (int)gfa_value_to_long(v1);
+                        if (v2) y1 = (int)gfa_value_to_long(v2);
+                        if (v3) r  = (int)gfa_value_to_long(v3);
+                    }
+                    if (rt->sp > 0) {
+                        v4 = gfa_value_pop(rt);
+                    }
+                    if (r > 0) {
+                        if (v4 && gfa_value_to_long(v4) != 0)
+                            gfx_fill_circle(x1, y1, r);
+                        else
+                            gfx_circle(x1, y1, r);
+                    }
+                } else {
+                    if (rt->sp >= 4) {
+                        v4 = gfa_value_pop(rt);
+                        v3 = gfa_value_pop(rt);
+                        v2 = gfa_value_pop(rt);
+                        v1 = gfa_value_pop(rt);
+                        if (v1) x1 = (int)gfa_value_to_long(v1);
+                        if (v2) y1 = (int)gfa_value_to_long(v2);
+                        if (v3) x2 = (int)gfa_value_to_long(v3);
+                        if (v4) y2 = (int)gfa_value_to_long(v4);
+                    }
+                    if (inst->opcode == OP_LINE_GFX)
+                        gfx_line(x1, y1, x2, y2);
+                    else if (inst->opcode == OP_PBOX_GFX)
+                        gfx_fill_box(x1, y1, x2, y2);
+                    else
+                        gfx_box(x1, y1, x2, y2);
                 }
-                if (rt->sp >= 2) {
-                    v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt);
-                    if (v1) { x2 = (int)gfa_value_to_long(v1); os_mem_free(v1); }
-                    if (v2) { y2 = (int)gfa_value_to_long(v2); os_mem_free(v2); }
-                }
-                /* Emit ANSI placeholder */
-                if (inst->opcode == OP_LINE_GFX)
-                    os_con_output_string("[LINE]");
-                else if (inst->opcode == OP_CIRCLE_GFX)
-                    os_con_output_string("[CIRCLE]");
-                else
-                    os_con_output_string("[RECT]");
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+                if (v3) os_mem_free(v3);
+                if (v4) os_mem_free(v4);
             }
             break;
 
@@ -1645,57 +1680,58 @@ static int execute_instruction(gfa_runtime *rt)
         case OP_GEMDOS:
             /* Stack: [fn] [arg1] [arg2] ; call GEMDOS */
             if (rt->sp >= 3) {
+                gfa_value *a3, *a2, *a1;
                 os_int32 fn, arg1, arg2;
-                v2 = gfa_value_pop(rt);
-                v1 = gfa_value_pop(rt);
-                v0 = gfa_value_pop(rt);
-                if (v0 && v1 && v2) {
-                    fn = gfa_value_to_long(v0);
-                    arg1 = gfa_value_to_long(v1);
-                    arg2 = gfa_value_to_long(v2);
+                a3 = gfa_value_pop(rt);
+                a2 = gfa_value_pop(rt);
+                a1 = gfa_value_pop(rt);
+                if (a1 && a2 && a3) {
+                    fn = gfa_value_to_long(a1);
+                    arg1 = gfa_value_to_long(a2);
+                    arg2 = gfa_value_to_long(a3);
                     gfa_value_push_long(rt, gfa_gemdos(fn, arg1, arg2));
                 }
-                if (v0) os_mem_free(v0);
-                if (v1) os_mem_free(v1);
-                if (v2) os_mem_free(v2);
+                if (a1) os_mem_free(a1);
+                if (a2) os_mem_free(a2);
+                if (a3) os_mem_free(a3);
             }
             break;
 
         case OP_BIOS:
-            /* Stack: [fn] [arg1] [arg2] ; call BIOS */
             if (rt->sp >= 3) {
+                gfa_value *a3, *a2, *a1;
                 os_int32 fn, arg1, arg2;
-                v2 = gfa_value_pop(rt);
-                v1 = gfa_value_pop(rt);
-                v0 = gfa_value_pop(rt);
-                if (v0 && v1 && v2) {
-                    fn = gfa_value_to_long(v0);
-                    arg1 = gfa_value_to_long(v1);
-                    arg2 = gfa_value_to_long(v2);
+                a3 = gfa_value_pop(rt);
+                a2 = gfa_value_pop(rt);
+                a1 = gfa_value_pop(rt);
+                if (a1 && a2 && a3) {
+                    fn = gfa_value_to_long(a1);
+                    arg1 = gfa_value_to_long(a2);
+                    arg2 = gfa_value_to_long(a3);
                     gfa_value_push_long(rt, gfa_bios(fn, arg1, arg2));
                 }
-                if (v0) os_mem_free(v0);
-                if (v1) os_mem_free(v1);
-                if (v2) os_mem_free(v2);
+                if (a1) os_mem_free(a1);
+                if (a2) os_mem_free(a2);
+                if (a3) os_mem_free(a3);
             }
             break;
 
         case OP_XBIOS:
-            /* Stack: [fn] [arg1] [arg2] ; call XBIOS */
             if (rt->sp >= 3) {
+                gfa_value *a3, *a2, *a1;
                 os_int32 fn, arg1, arg2;
-                v2 = gfa_value_pop(rt);
-                v1 = gfa_value_pop(rt);
-                v0 = gfa_value_pop(rt);
-                if (v0 && v1 && v2) {
-                    fn = gfa_value_to_long(v0);
-                    arg1 = gfa_value_to_long(v1);
-                    arg2 = gfa_value_to_long(v2);
+                a3 = gfa_value_pop(rt);
+                a2 = gfa_value_pop(rt);
+                a1 = gfa_value_pop(rt);
+                if (a1 && a2 && a3) {
+                    fn = gfa_value_to_long(a1);
+                    arg1 = gfa_value_to_long(a2);
+                    arg2 = gfa_value_to_long(a3);
                     gfa_value_push_long(rt, gfa_xbios(fn, arg1, arg2));
                 }
-                if (v0) os_mem_free(v0);
-                if (v1) os_mem_free(v1);
-                if (v2) os_mem_free(v2);
+                if (a1) os_mem_free(a1);
+                if (a2) os_mem_free(a2);
+                if (a3) os_mem_free(a3);
             }
             break;
 

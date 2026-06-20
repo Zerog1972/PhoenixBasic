@@ -21,6 +21,7 @@
 #include "parser.h"
 #include "codegen.h"
 #include "runtime.h"
+#include "gfx.h"
 
 /* ------------------------------------------------------------------ */
 /* Charge un fichier en memoire                                       */
@@ -86,6 +87,9 @@ static int run_program(const char *source)
         return 1;
     }
 
+    /* Initialiser le mode graphique (SDL2, 640x400) */
+    gfx_init(640, 400);
+
     /* Parser le source */
     parser = gfa_parser_init(source);
     if (parser == NULL) {
@@ -134,6 +138,7 @@ static int run_program(const char *source)
     }
 
     gfa_runtime_shutdown(rt);
+    gfx_shutdown();
     return (result != 0) ? 1 : 0;
 }
 
