@@ -1203,6 +1203,37 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_FALSE: gfa_value_push_long(rt, 0); break;
                     case TOK_PI_TOK: gfa_value_push_float(rt, GFA_PI); break;
 
+                    /* AES (GEM) - implementes minimalement */
+                    case TOK_APPL_INIT:
+                        gfa_value_push_long(rt, 1);  /* Fake app ID */
+                        break;
+                    case TOK_APPL_EXIT:
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_FORM_ALERT:
+                        /* FORM_ALERT(button, string) : pop args, show on console */
+                        if (rt->sp >= 2) {
+                            gfa_value *s = gfa_value_pop(rt);
+                            gfa_value *b = gfa_value_pop(rt);
+                            if (s && s->type == GFA_VAL_STRING) {
+                                os_con_output_string("\n[ALERT] ");
+                                os_con_output_string(s->data.s ? s->data.s : "");
+                                os_con_output_string("\n");
+                            }
+                            if (s) os_mem_free(s);
+                            if (b) os_mem_free(b);
+                        }
+                        gfa_value_push_long(rt, 1);  /* Default button */
+                        break;
+                    case TOK_MENU_BAR:
+                    case TOK_WIND_OPEN:
+                    case TOK_WIND_CLOSE:
+                    case TOK_EVNT_KEYBD:
+                    case TOK_EVNT_MOUSE:
+                    case TOK_GRAF_DRAGBOX:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
                     /* Non implemente */
                     default:
                         gfa_value_push_long(rt, 0);
