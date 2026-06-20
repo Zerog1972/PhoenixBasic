@@ -181,13 +181,7 @@ static ast_node *parse_line(gfa_parser *parser)
             ast_add_child(line, stmt);
         }
 
-        /* Verifier le separateur ':' */
-        tok = gfa_lexer_current_token(parser->lexer);
-        if (tok == TOK_COLON) {
-            gfa_lexer_next(parser->lexer);
-            continue;
-        }
-
+        /* Une seule instruction par ligne (GFA Basic 3.5 original) */
         break;
     }
 
