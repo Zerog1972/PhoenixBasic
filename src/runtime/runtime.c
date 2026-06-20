@@ -1301,9 +1301,51 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_BGET:
+            /* Stack: [channel] [addr] [count] ; read file -> buffer */
+            if (rt->sp >= 3) {
+                gfa_value *co, *ad, *ch;
+                int chan, count, n;
+                static char bget_buf[4096];
+                co = gfa_value_pop(rt);
+                ad = gfa_value_pop(rt);
+                ch = gfa_value_pop(rt);
+                if (ch && ad && co) {
+                    chan  = (int)gfa_value_to_long(ch);
+                    count = (int)gfa_value_to_long(co);
+                    if (count > 4096) count = 4096;
+                    n = gfa_bget(chan, bget_buf, count);
+                    gfa_value_push_long(rt, (os_int32)n);
+                } else {
+                    gfa_value_push_long(rt, (os_int32)-1);
+                }
+                if (ch) os_mem_free(ch);
+                if (ad) os_mem_free(ad);
+                if (co) os_mem_free(co);
+            }
+            break;
+
         case OP_BPUT:
-            /* Placeholder - les fonctions existent dans files.c */
-            gfa_value_push_long(rt, (os_int32)0);
+            /* Stack: [channel] [addr] [count] ; write buffer -> file */
+            if (rt->sp >= 3) {
+                gfa_value *co, *ad, *ch;
+                int chan, count, n;
+                static char bput_buf[4096];
+                co = gfa_value_pop(rt);
+                ad = gfa_value_pop(rt);
+                ch = gfa_value_pop(rt);
+                if (ch && ad && co) {
+                    chan  = (int)gfa_value_to_long(ch);
+                    count = (int)gfa_value_to_long(co);
+                    if (count > 4096) count = 4096;
+                    n = gfa_bput(chan, bput_buf, count);
+                    gfa_value_push_long(rt, (os_int32)n);
+                } else {
+                    gfa_value_push_long(rt, (os_int32)-1);
+                }
+                if (ch) os_mem_free(ch);
+                if (ad) os_mem_free(ad);
+                if (co) os_mem_free(co);
+            }
             break;
 
         case OP_PRINT_CHAN:

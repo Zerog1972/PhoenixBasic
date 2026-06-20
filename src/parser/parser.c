@@ -209,7 +209,6 @@ static ast_node *parse_statement(gfa_parser *parser)
     gfa_token_type tok;
 
     tok = gfa_lexer_current_token(parser->lexer);
-
     switch (tok) {
 
         /* Commentaires */
