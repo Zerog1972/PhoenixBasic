@@ -2035,6 +2035,7 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_APPL_INIT: case TOK_APPL_EXIT: case TOK_APPL_FIND:
         case TOK_FORM_ALERT: case TOK_MENU_BAR: case TOK_WIND_OPEN:
         case TOK_WIND_CLOSE: case TOK_EVNT_KEYBD:
+        case TOK_BGET: case TOK_BPUT:
         {
             ast_node *call;
             gfa_token_type func_tok;

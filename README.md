@@ -15,7 +15,7 @@ make          # compiler l'émulateur
 ## Tests
 
 ```bash
-make test-all   # 236 tests unitaires (100%)
+make test-all   # 267 tests C + 9 tests BASIC (440+ total, 100%)
 ./build/gfabasic tests/test_if.bas   # 31 tests IF/THEN/ELSE
 ```
 
@@ -42,14 +42,14 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 | Catégorie | Détail |
 |-----------|--------|
 | **Contrôle de flux** | IF/THEN/ELSE/ENDIF (inline + multi-lignes), FOR/NEXT (STEP), WHILE/WEND, REPEAT/UNTIL, SELECT/CASE, GOTO/GOSUB/RETURN/@, DO/LOOP |
-| **Procédures/Fonctions** | PROCEDURE, FUNCTION, RETURN expr, LOCAL, VAR (by-ref), DEFFN/FN, récursion |
+| **Procédures/Fonctions** | PROCEDURE, FUNCTION, RETURN expr, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`) |
 | **Tableaux 1D** | DIM, `a(i)=expr`, `PRINT a(i)`, OP_ARRAY_LOAD/STORE |
 | **Opérateurs** | `+` `-` `*` `/` `^` `=` `<>` `<` `>` `<=` `>=` AND OR XOR NOT EQV IMP MOD DIV |
 | **Mathématiques** | 35 fonctions : trigo, log, exp, racine, abs, min/max, factorielle, combinaisons, aléatoire |
 | **Chaînes** | 18 fonctions : LEN, ASC, CHR$, VAL, LEFT$/RIGHT$/MID$, INSTR, UPPER$/LCASE$, TRIM$, STR$/BIN$/HEX$/OCT$, SPACE$ |
 | **Entrées/Sorties** | PRINT, PRINT #, INPUT, INPUT #, LINE INPUT, INKEY$, CLS, LOCATE |
 | **Fichiers** | OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#/INPUT# |
-| **Mémoire** | PEEK/POKE/DPEEK/LPEEK, DIM/ERASE/CLEAR, DATA/READ/RESTORE, MALLOC/MFREE |
+    | **Mémoire** | PEEK/POKE/DPEEK/LPEEK, DIM/ERASE/CLEAR, DATA/READ/RESTORE, MALLOC/MFREE, BLOAD/BSAVE/BGET/BPUT |
 | **Son** | BEEP, SOUND ch, freq, dur, vol, env |
 | **Événements** | EVERY, AFTER, ON ERROR, ON BREAK, ERROR, ERR |
 | **Édition** | LIST avec indentation, EDIT en place (← → Home End Bksp Del), INSERT, DELETE, LOAD/SAVE |
@@ -57,26 +57,26 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 ## Architecture
 
 ```
-main.c ──┬── lexer/    (490 keywords, tokens, EOL)
-         ├── parser/   (LL(1), AST, labels 2-pass)
-         ├── codegen/  (AST → bytecode)
-         └── runtime/  (VM pile, call stack, builtins)
-              ├── memory/   (symboles, tableaux)
-              ├── builtins/ (maths, chaînes)
-              ├── io/       (fichiers)
-              ├── events/   (EVERY, AFTER, ON ERROR)
-              ├── sound/    (BEEP, SOUND)
-              └── tos/      (GEMDOS, BIOS, XBIOS)
- utils/os_layer  (abstraction fichiers, console, temps)
+main.c ──┬── lexer/     (490 keywords, tokens, EOL)
+         ├── parser/    (LL(1), AST, labels 2-pass)
+         ├── codegen/   (AST → bytecode)
+         └── runtime/   (VM pile, call stack, builtins)
+              ├── memory/    (symboles, tableaux)
+              ├── builtins/  (maths 35/35, chaînes 18/18)
+              ├── io/        (fichiers, BLOAD/BSAVE/BGET/BPUT)
+              ├── events/    (EVERY, AFTER, ON ERROR)
+              ├── sound/     (BEEP, SOUND)
+              ├── tos/       (GEMDOS, BIOS, XBIOS, AES)
+              └── graphics/  (SDL2, COLOR, LINE, BOX, CIRCLE)
+ utils/os_layer   (abstraction fichiers, console, temps)
 ```
 
 ## Limitations
 
 | Limitation | Détail |
 |-----------|--------|
-| Appel procédure bare | `maProc 1,2` non supporté → utiliser `GOSUB` ou `result = func()` |
-| Mots-clés comme noms | `add`, `val`, `double`, `inc` réservés |
-| Fichiers binaires | BLOAD/BSAVE/BGET/BPUT non implémentés |
+| Mots-clés comme noms | `add`, `val`, `double`, `inc` réservés (lexer non contextuel) |
 | Format flottant | IEEE-754, pas le format GFA 8 octets |
-| GEM AES / TOS | Non implémentés |
-| Graphisme VDI | Placeholder ANSI (pas de SDL2) |
+| GEM AES complet | Menus, fenêtres, événements souris partiellement implémentés |
+| RESTORE label | Parse OK mais restauration DATA globale (label ignoré) |
+| ON x GOTO/GOSUB | Parse OK, non implémenté dans le runtime |

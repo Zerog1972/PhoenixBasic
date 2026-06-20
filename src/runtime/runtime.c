@@ -1210,6 +1210,50 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_APPL_EXIT:
                         gfa_value_push_long(rt, 0);
                         break;
+                    case TOK_BGET:
+                        /* BGET(#chan, addr, count) returns bytes read */
+                        if (rt->sp >= 3) {
+                            gfa_value *c, *a, *ch;
+                            int count, n, chan;
+                            static char bgetbuf2[4096];
+                            c = gfa_value_pop(rt);
+                            a = gfa_value_pop(rt);
+                            ch = gfa_value_pop(rt);
+                            if (ch && a && c) {
+                                chan = (int)gfa_value_to_long(ch);
+                                count = (int)gfa_value_to_long(c);
+                                if (count > 4096) count = 4096;
+                                n = gfa_bget(chan, (void *)bgetbuf2, count);
+                                gfa_value_push_long(rt, (os_int32)n);
+                            } else gfa_value_push_long(rt, -1);
+                            if (ch) os_mem_free(ch);
+                            if (a) os_mem_free(a);
+                            if (c) os_mem_free(c);
+                        } else gfa_value_push_long(rt, -1);
+                        break;
+
+                    case TOK_BPUT:
+                        /* BPUT(#chan, addr, count) returns bytes written */
+                        if (rt->sp >= 3) {
+                            gfa_value *c, *a, *ch;
+                            int count, n, chan;
+                            static char bputbuf2[4096];
+                            c = gfa_value_pop(rt);
+                            a = gfa_value_pop(rt);
+                            ch = gfa_value_pop(rt);
+                            if (ch && a && c) {
+                                chan = (int)gfa_value_to_long(ch);
+                                count = (int)gfa_value_to_long(c);
+                                if (count > 4096) count = 4096;
+                                n = gfa_bput(chan, (const void *)bputbuf2, count);
+                                gfa_value_push_long(rt, (os_int32)n);
+                            } else gfa_value_push_long(rt, -1);
+                            if (ch) os_mem_free(ch);
+                            if (a) os_mem_free(a);
+                            if (c) os_mem_free(c);
+                        } else gfa_value_push_long(rt, -1);
+                        break;
+
                     case TOK_FORM_ALERT:
                         /* FORM_ALERT(button, string) : pop args, show on console */
                         if (rt->sp >= 2) {
