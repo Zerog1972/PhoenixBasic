@@ -86,6 +86,25 @@ static void test_gemdos(void)
     ret = gfa_gemdos(GEMDOS_FSNEXT, 0, 0);
     TEST_ASSERT(ret == -49, "GEMDOS FSNEXT returns -49 (no more files)");
 
+    /* GEMDOS Malloc / Mfree (via handle 32-bit sur 64-bit) */
+    {
+        os_int32 handle;
+        handle = gfa_gemdos(GEMDOS_MALLOC, 128, 0);
+        TEST_ASSERT(handle >= 1, "GEMDOS MALLOC(128) returns handle >= 1");
+        if (handle >= 1) {
+            ret = gfa_gemdos(GEMDOS_MFREE, handle, 0);
+            TEST_ASSERT(ret == 0, "GEMDOS MFREE(handle) returns 0");
+        }
+        /* Allocation de taille 0 */
+        handle = gfa_gemdos(GEMDOS_MALLOC, 0, 0);
+        TEST_ASSERT(handle == 0, "GEMDOS MALLOC(0) returns 0 (no alloc)");
+        /* Liberation de handle invalide (no crash) */
+        ret = gfa_gemdos(GEMDOS_MFREE, 0, 0);
+        TEST_ASSERT(ret == 0, "GEMDOS MFREE(0) returns 0 (no crash)");
+        ret = gfa_gemdos(GEMDOS_MFREE, 999, 0);
+        TEST_ASSERT(ret == 0, "GEMDOS MFREE(999) returns 0 (no crash)");
+    }
+
 }
 
 /* ------------------------------------------------------------------ */

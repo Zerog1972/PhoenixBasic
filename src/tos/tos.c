@@ -9,6 +9,13 @@
 #include "tos.h"
 #include <string.h>
 
+/* Table de pointeurs pour GEMDOS MALLOC emulant des handles 32-bit  */
+/* sur architectures 64-bit (evite la troncature de pointeurs).      */
+#define GEMDOS_MAX_ALLOC 64
+
+static void   *g_gemdos_ptrs[GEMDOS_MAX_ALLOC];
+static int     g_gemdos_used[GEMDOS_MAX_ALLOC];
+
 /* ------------------------------------------------------------------ */
 /* GEMDOS                                                             */
 /* ------------------------------------------------------------------ */
@@ -182,18 +189,38 @@ os_int32 gfa_gemdos(os_int32 fn, os_int32 arg1, os_int32 arg2)
             }
             break;
 
-        /* Malloc - Allocation memoire */
+        /* Malloc - Allocation memoire (retourne un handle 32-bit) */
         case GEMDOS_MALLOC:
             {
                 void *ptr;
+                int slot;
                 ptr = os_mem_alloc((size_t)arg1);
-                return (os_int32)((size_t)ptr & 0xFFFFFFFFL);
+                if (ptr == NULL) return (os_int32)0;
+                /* Trouver un slot libre dans la table de handles */
+                for (slot = 0; slot < GEMDOS_MAX_ALLOC; slot++) {
+                    if (g_gemdos_used[slot] == 0) {
+                        g_gemdos_ptrs[slot] = ptr;
+                        g_gemdos_used[slot] = 1;
+                        return (os_int32)(slot + 1);  /* handle 1-based */
+                    }
+                }
+                /* Plus de slots : liberer et retourner 0 */
+                os_mem_free(ptr);
+                return (os_int32)0;
             }
             break;
 
-        /* Mfree - Liberation memoire */
+        /* Mfree - Liberation memoire par handle */
         case GEMDOS_MFREE:
-            os_mem_free((void *)(size_t)arg1);
+            {
+                int slot;
+                slot = ((int)arg1) - 1;  /* handle 1-based -> index 0-based */
+                if (slot >= 0 && slot < GEMDOS_MAX_ALLOC && g_gemdos_used[slot]) {
+                    os_mem_free(g_gemdos_ptrs[slot]);
+                    g_gemdos_ptrs[slot] = NULL;
+                    g_gemdos_used[slot] = 0;
+                }
+            }
             return 0;
 
         /* Fsfirst - Premier fichier */
