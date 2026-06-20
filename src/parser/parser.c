@@ -478,20 +478,62 @@ static ast_node *parse_statement(gfa_parser *parser)
                 }
                 return node;
             }
-        case TOK_ON_ERROR:
+        case TOK_ON:
             {
-                ast_node *node;
-                node = ast_create(AST_ON_ERROR);
-                gfa_lexer_next(parser->lexer);
-                if (gfa_lexer_current_token(parser->lexer) == TOK_GOSUB) {
-                    gfa_lexer_next(parser->lexer);
-                    if (parser->lexer->current.type == TOK_IDENTIFIER) {
-                        ast_add_child(node, ast_create_ident(AST_ASSIGN,
-                            parser->lexer->current.value.ident_name));
+                gfa_lexer_next(parser->lexer);  /* consommer ON */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_ERROR) {
+                    ast_node *node;
+                    node = ast_create(AST_ON_ERROR);
+                    gfa_lexer_next(parser->lexer);  /* consommer ERROR */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_GOSUB ||
+                        gfa_lexer_current_token(parser->lexer) == TOK_GOTO) {
+                        gfa_lexer_next(parser->lexer);
+                        if (parser->lexer->current.type == TOK_IDENTIFIER) {
+                            ast_add_child(node, ast_create_ident(AST_ASSIGN,
+                                parser->lexer->current.value.ident_name));
+                        }
+                        gfa_lexer_next(parser->lexer);
                     }
-                    gfa_lexer_next(parser->lexer);
+                    return node;
                 }
-                return node;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_ON_BREAK) {
+                    ast_node *node;
+                    node = ast_create(AST_ON_BREAK);
+                    gfa_lexer_next(parser->lexer);  /* consommer BREAK */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_GOSUB) {
+                        gfa_lexer_next(parser->lexer);
+                        if (parser->lexer->current.type == TOK_IDENTIFIER) {
+                            ast_add_child(node, ast_create_ident(AST_ASSIGN,
+                                parser->lexer->current.value.ident_name));
+                        }
+                        gfa_lexer_next(parser->lexer);
+                    }
+                    return node;
+                }
+                /* ON expr GOTO/GOSUB (ON x GOTO/GOSUB label, ...) */
+                {
+                    ast_node *node;
+                    ast_node *expr_node;
+                    expr_node = parse_expression(parser);
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_GOTO ||
+                        gfa_lexer_current_token(parser->lexer) == TOK_GOSUB) {
+                        node = ast_create(AST_ON_GOTO_GOSUB);
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_child(node, expr_node);
+                        while (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                            ast_add_child(node,
+                                ast_create_ident(AST_ASSIGN,
+                                    parser->lexer->current.value.ident_name));
+                            gfa_lexer_next(parser->lexer);
+                            if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                                gfa_lexer_next(parser->lexer);
+                            } else break;
+                        }
+                        return node;
+                    }
+                    PARSER_ERROR(parser, "Expected ERROR, BREAK, GOTO or GOSUB after ON");
+                    return NULL;
+                }
             }
         case TOK_ERROR:
             {

@@ -56,6 +56,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"BMOVE",         TOK_BMOVE},
     {"BOUNDARY",      TOK_BOUNDARY},
     {"BOX",           TOK_BOX},
+    {"BREAK",         TOK_ON_BREAK},
     {"BPUT",          TOK_BPUT},
     {"BSAVE",         TOK_BSAVE},
     {"BSET",          TOK_BSET},
