@@ -1824,6 +1824,52 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        case OP_ON_GOTO:
+        case OP_ON_GOSUB:
+            /* Stack: [label_count] [label_str_idx...] [index] */
+            if (rt->sp >= 3) {
+                gfa_value *idx_val, *cnt_val;
+                int label_count, i, idx, target_str_idx, found;
+                int label_str_indices[32];
+                cnt_val = gfa_value_pop(rt);
+                label_count = cnt_val ? (int)gfa_value_to_long(cnt_val) : 0;
+                if (cnt_val) os_mem_free(cnt_val);
+                if (label_count < 1 || label_count > 32) label_count = 0;
+                for (i = 0; i < label_count && rt->sp > 0; i++) {
+                    gfa_value *lv = gfa_value_pop(rt);
+                    label_str_indices[i] = lv ? (int)gfa_value_to_long(lv) : -1;
+                    if (lv) os_mem_free(lv);
+                }
+                idx_val = gfa_value_pop(rt);
+                idx = idx_val ? (int)gfa_value_to_long(idx_val) : 0;
+                if (idx_val) os_mem_free(idx_val);
+                if (label_count > 0 && idx >= 1 && idx <= label_count) {
+                    target_str_idx = label_str_indices[label_count - idx];
+                    if (target_str_idx >= 0 && rt->program) {
+                        found = 0;
+                        for (i = 0; i < rt->program->length && !found; i++) {
+                            if (rt->program->code[i].opcode == OP_LABEL
+                                && rt->program->code[i].operand.int_val
+                                   == (os_int32)target_str_idx) {
+                                if (inst->opcode == OP_ON_GOSUB
+                                    && rt->call_depth < GFA_MAX_CALL_DEPTH) {
+                                    gfa_call_frame *f;
+                                    f = &rt->call_stack[rt->call_depth++];
+                                    f->return_ip = rt->ip + 1;
+                                    f->return_sp = rt->sp;
+                                    f->is_gosub  = 1;
+                                    f->proc_index = 0;
+                                    f->saved_count = 0;
+                                }
+                                rt->ip = i;
+                                found = 1;
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+
         case OP_LABEL:
         case OP_LINE_NUM:
             /* Marqueurs, ne rien faire */

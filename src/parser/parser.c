@@ -526,6 +526,7 @@ static ast_node *parse_statement(gfa_parser *parser)
                     if (gfa_lexer_current_token(parser->lexer) == TOK_GOTO ||
                         gfa_lexer_current_token(parser->lexer) == TOK_GOSUB) {
                         node = ast_create(AST_ON_GOTO_GOSUB);
+                        node->value.int_val = (gfa_lexer_current_token(parser->lexer) == TOK_GOSUB) ? 1 : 0;
                         gfa_lexer_next(parser->lexer);
                         ast_add_child(node, expr_node);
                         while (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {

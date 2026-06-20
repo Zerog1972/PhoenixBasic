@@ -243,6 +243,8 @@ typedef enum {
     OP_BSAVE        = 151,  /* BSAVE filename, start, end             */
     OP_BGET         = 152,  /* BGET #channel, addr, count             */
     OP_BPUT         = 153,  /* BPUT #channel, addr, count             */
+    OP_ON_GOTO      = 154,  /* ON expr GOTO label1, label2, ...       */
+    OP_ON_GOSUB     = 155,  /* ON expr GOSUB label1, label2, ...      */
 
     /* Debug */
     OP_TRON         = 130,

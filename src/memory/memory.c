@@ -692,6 +692,12 @@ int gfa_bytecode_add_string(gfa_bytecode *bc, const char *str)
 
     if (bc == NULL) return -1;
 
+    /* Check for duplicate */
+    for (idx = 0; idx < bc->str_count; idx++) {
+        if (bc->strings[idx] && str && strcmp(bc->strings[idx], str) == 0)
+            return idx;
+    }
+
     new_strings = (char **)os_mem_realloc(bc->strings,
         (size_t)(bc->str_count + 1) * sizeof(char *));
     if (new_strings == NULL) return -1;
