@@ -783,6 +783,15 @@ static void cg_select(codegen_ctx *ctx, ast_node *node)
         cg_patch(ctx, end_patches[i], (os_int32)cg_current(ctx));
 }
 
+static int cg_is_print_separator(ast_node *n)
+{
+    if (n == NULL) return 0;
+    /* Separateur PRINT : AST_ASSIGN sans nom, sans enfants, valeur 0(=;) ou 1(=,) */
+    if (n->type == AST_ASSIGN && !n->has_ident && !n->left && !n->right
+        && (n->value.int_val == 0 || n->value.int_val == 1)) return 1;
+    return 0;
+}
+
 static void cg_print(codegen_ctx *ctx, ast_node *node)
 {
     ast_node *arg;
@@ -795,15 +804,32 @@ static void cg_print(codegen_ctx *ctx, ast_node *node)
         if (arg) {
             ast_node *expr = arg->right;
             while (expr) {
-                cg_expression(ctx, arg);    /* push channel */
-                cg_expression(ctx, expr);   /* push value */
-                cg_emit(ctx, OP_PRINT_CHAN);
+                if (!cg_is_print_separator(expr)) {
+                    cg_expression(ctx, arg);    /* push channel */
+                    cg_expression(ctx, expr);   /* push value */
+                    cg_emit(ctx, OP_PRINT_CHAN);
+                }
                 expr = expr->right;
             }
         }
     } else {
-        while (arg) { cg_expression(ctx, arg); cg_emit(ctx, OP_PRINT); arg = arg->right; }
-        if (!node->left) { cg_emit_str(ctx, OP_PUSH_STRING, ""); cg_emit(ctx, OP_PRINT); }
+        while (arg) {
+            if (!cg_is_print_separator(arg)) {
+                int has_semicolon;
+                ast_node *next;
+                cg_expression(ctx, arg);
+                cg_emit(ctx, OP_PRINT);
+                next = arg->right;
+                /* Check if next sibling is a ; separator (suppress newline) */
+                has_semicolon = (next != NULL && cg_is_print_separator(next)
+                                 && next->value.int_val == 0);
+                if (!has_semicolon) {
+                    cg_emit(ctx, OP_PRINT_NL);
+                }
+            }
+            arg = arg->right;
+        }
+        if (!node->left) { cg_emit_str(ctx, OP_PUSH_STRING, ""); cg_emit(ctx, OP_PRINT); cg_emit(ctx, OP_PRINT_NL); }
     }
 }
 

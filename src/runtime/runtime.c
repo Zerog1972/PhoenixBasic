@@ -1227,9 +1227,12 @@ static int execute_instruction(gfa_runtime *rt)
                         os_mem_free(s);
                     }
                 }
-                os_con_output_char('\n');
                 os_mem_free(v1);
             }
+            break;
+
+        case OP_PRINT_NL:
+            os_con_output_char('\n');
             break;
 
         case OP_PRINT_CHAN:

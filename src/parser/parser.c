@@ -1856,7 +1856,7 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_INT: case TOK_FIX: case TOK_ROUND: case TOK_FRAC:
         case TOK_SGN: case TOK_RND: case TOK_PEEK: case TOK_DPEEK:
         case TOK_LPEEK: case TOK_INKEY: case TOK_INP: case TOK_CHR_TOK:
-        case TOK_STR_TOK: case TOK_HEX_TOK: case TOK_BIN_TOK:
+        case TOK_STR_TOK: case TOK_HEX_TOK: case TOK_BIN_TOK: case TOK_OCT_TOK:
         case TOK_LEFT_TOK: case TOK_RIGHT_TOK: case TOK_MID_TOK:
         case TOK_INSTR: case TOK_RINSTR:
         case TOK_STRING_TOK: case TOK_SPACE_TOK:

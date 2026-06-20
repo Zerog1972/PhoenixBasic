@@ -238,6 +238,7 @@ typedef enum {
     /* Locals */
     OP_SAVE_LOCAL   = 126,  /* Pop arg, save old val, assign to var*/
     OP_BIND_REF     = 127,  /* Pop arg, assign to var (no save, VAR) */
+    OP_PRINT_NL     = 128,  /* Output newline                        */
 
     /* Debug */
     OP_TRON         = 130,
