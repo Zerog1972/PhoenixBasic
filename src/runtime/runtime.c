@@ -1235,6 +1235,77 @@ static int execute_instruction(gfa_runtime *rt)
             os_con_output_char('\n');
             break;
 
+        case OP_BLOAD:
+            /* Stack: [filename$] [addr] ; load file into buffer */
+            if (rt->sp >= 2) {
+                gfa_value *ad;
+                gfa_value *fn;
+                static char bload_buf[65536];
+                os_file_handle fh;
+                os_int32 size, nread;
+                ad = gfa_value_pop(rt);
+                fn = gfa_value_pop(rt);
+                if (fn && fn->type == GFA_VAL_STRING && fn->data.s) {
+                    fh = os_file_open(fn->data.s, 'I', 0);
+                    if (fh != NULL) {
+                        size = os_file_size(fh);
+                        if (size > 65536) size = 65536;
+                        if (size < 0) size = 0;
+                        nread = os_file_read(fh, bload_buf, size);
+                        os_file_close(fh);
+                        gfa_value_push_long(rt, nread);
+                    } else {
+                        gfa_value_push_long(rt, -1);
+                    }
+                } else {
+                    gfa_value_push_long(rt, -1);
+                }
+                if (fn) os_mem_free(fn);
+                if (ad) os_mem_free(ad);
+            }
+            break;
+
+        case OP_BSAVE:
+            /* Stack: [filename$] [start] [end] ; save buffer to file */
+            if (rt->sp >= 3) {
+                gfa_value *en;
+                gfa_value *st;
+                gfa_value *fn;
+                static char bsave_buf[65536];
+                os_file_handle fh;
+                os_int32 start, end, len, written;
+                en = gfa_value_pop(rt);
+                st = gfa_value_pop(rt);
+                fn = gfa_value_pop(rt);
+                if (fn && st && en && fn->type == GFA_VAL_STRING && fn->data.s) {
+                    start = (os_int32)gfa_value_to_long(st);
+                    end   = (os_int32)gfa_value_to_long(en);
+                    if (end < start) { os_int32 tmp = start; start = end; end = tmp; }
+                    len = end - start;
+                    if (len > 65536) len = 65536;
+                    fh = os_file_open(fn->data.s, 'O', 0);
+                    if (fh != NULL && len > 0) {
+                        written = os_file_write(fh, bsave_buf + start, len);
+                        os_file_close(fh);
+                        gfa_value_push_long(rt, (os_int32)written);
+                    } else {
+                        gfa_value_push_long(rt, -1);
+                    }
+                } else {
+                    gfa_value_push_long(rt, -1);
+                }
+                if (fn) os_mem_free(fn);
+                if (st) os_mem_free(st);
+                if (en) os_mem_free(en);
+            }
+            break;
+
+        case OP_BGET:
+        case OP_BPUT:
+            /* Placeholder - les fonctions existent dans files.c */
+            gfa_value_push_long(rt, (os_int32)0);
+            break;
+
         case OP_PRINT_CHAN:
             /* Stack: [channel] [value] ; write value to file channel */
             if (rt->sp >= 2) {

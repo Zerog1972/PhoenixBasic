@@ -239,6 +239,10 @@ typedef enum {
     OP_SAVE_LOCAL   = 126,  /* Pop arg, save old val, assign to var*/
     OP_BIND_REF     = 127,  /* Pop arg, assign to var (no save, VAR) */
     OP_PRINT_NL     = 128,  /* Output newline                        */
+    OP_BLOAD        = 150,  /* BLOAD filename, addr                   */
+    OP_BSAVE        = 151,  /* BSAVE filename, start, end             */
+    OP_BGET         = 152,  /* BGET #channel, addr, count             */
+    OP_BPUT         = 153,  /* BPUT #channel, addr, count             */
 
     /* Debug */
     OP_TRON         = 130,

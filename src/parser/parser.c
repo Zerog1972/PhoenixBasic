@@ -840,9 +840,73 @@ static ast_node *parse_statement(gfa_parser *parser)
                 return node;
             }
 
-        case TOK_SWAP:
-        case TOK_BSAVE:
         case TOK_BLOAD:
+            {
+                ast_node *node;
+                node = ast_create(AST_BLOAD);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));  /* filename */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* addr */
+                return node;
+            }
+        case TOK_BSAVE:
+            {
+                ast_node *node;
+                node = ast_create(AST_BSAVE);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));  /* filename */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* start */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* end */
+                return node;
+            }
+        case TOK_BGET:
+            {
+                ast_node *node;
+                node = ast_create(AST_BGET);
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* channel */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* addr */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* count */
+                return node;
+            }
+        case TOK_BPUT:
+            {
+                ast_node *node;
+                node = ast_create(AST_BPUT);
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* channel */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* addr */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));  /* count */
+                return node;
+            }
+        case TOK_SWAP:
         case TOK_BMOVE:
         case TOK_MSHRINK:
             gfa_lexer_next(parser->lexer);

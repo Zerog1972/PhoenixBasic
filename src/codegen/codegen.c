@@ -287,6 +287,20 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_BEEP:        cg_emit(ctx, OP_BEEP); break;
     case AST_TRON:        cg_emit(ctx, OP_TRON); break;
     case AST_TROFF:       cg_emit(ctx, OP_TROFF); break;
+    case AST_BLOAD:
+    case AST_BSAVE:
+    case AST_BGET:
+    case AST_BPUT:
+        {
+            int op = (node->type == AST_BLOAD) ? OP_BLOAD :
+                     (node->type == AST_BSAVE) ? OP_BSAVE :
+                     (node->type == AST_BGET)  ? OP_BGET  : OP_BPUT;
+            ast_node *arg;
+            arg = node->left;
+            while (arg) { cg_expression(ctx, arg); arg = arg->right; }
+            cg_emit(ctx, op);
+        }
+        break;
 
     case AST_LOCATE:
         if (node->left) {

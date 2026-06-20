@@ -118,6 +118,10 @@ typedef enum {
     AST_CALL,             /* Appel de procedure/builtin              */
     AST_VOID,             /* VOID expr                               */
     AST_TILDE,            /* ~expr                                   */
+    AST_BLOAD,            /* BLOAD "fichier", adresse                 */
+    AST_BSAVE,            /* BSAVE "fichier", debut, fin              */
+    AST_BGET,             /* BGET #n, adresse, nb                    */
+    AST_BPUT,             /* BPUT #n, adresse, nb                    */
 
     /* Labels */
     AST_LABEL,            /* etiquette:                              */
