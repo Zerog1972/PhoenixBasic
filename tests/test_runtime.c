@@ -304,6 +304,7 @@ static void test_arrays(void)
     os_int32 sizes[2];
     int indices[2];
     double *elem;
+    double *check;
 
     printf("\n--- Arrays ---\n");
 
@@ -321,17 +322,13 @@ static void test_arrays(void)
     elem = (double *)gfa_var_array_get_element(arr, indices);
     TEST_ASSERT(elem != NULL, "Element access returns non-NULL");
     *elem = 99.5;
-    {
-        double *check = (double *)gfa_var_array_get_element(arr, indices);
-        TEST_ASSERT(*check == 99.5, "Array element stored/retrieved");
-    }
+    check = (double *)gfa_var_array_get_element(arr, indices);
+    TEST_ASSERT(*check == 99.5, "Array element stored/retrieved");
 
     gfa_var_array_fill(arr, 7.0);
-    {
-        indices[0] = 0; indices[1] = 0;
-        double *check = (double *)gfa_var_array_get_element(arr, indices);
-        TEST_ASSERT(check != NULL && *check == 7.0, "ARRAYFILL sets all elements");
-    }
+    indices[0] = 0; indices[1] = 0;
+    check = (double *)gfa_var_array_get_element(arr, indices);
+    TEST_ASSERT(check != NULL && *check == 7.0, "ARRAYFILL sets all elements");
 
     TEST_ASSERT(gfa_var_array_count(arr) == 12, "DIM? returns 12");
 
@@ -1451,6 +1448,62 @@ static void test_memory(void)
     gfa_runtime_execute(rt);
     TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 2000,
                 "LPEEK(2000) pushes back the address");
+    gfa_runtime_shutdown(rt);
+
+    /* Test SPOKE/SDPOKE/SLPOKE */
+    rt = gfa_runtime_init();
+    bc = gfa_bytecode_create();
+    gfa_var_create(rt->globals, "r", GFA_VAR_LONG);
+
+    /* SPOKE 500, 77 - no-crash stub test */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 500.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 77.0);
+    gfa_bytecode_emit(bc, OP_SPOKE);
+    /* SPOKE 600, 88 - second test */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 600.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 88.0);
+    gfa_bytecode_emit(bc, OP_SPOKE);
+    gfa_bytecode_emit(bc, OP_END);
+
+    gfa_runtime_load(rt, bc);
+    gfa_runtime_execute(rt);
+    TEST_ASSERT(1, "SPOKE 500,77 and SPOKE 600,88 do not crash");
+    gfa_runtime_shutdown(rt);
+
+    rt = gfa_runtime_init();
+    bc = gfa_bytecode_create();
+
+    /* SDPOKE 1000, 65535 - no-crash stub test */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 1000.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 65535.0);
+    gfa_bytecode_emit(bc, OP_SDPOKE);
+    /* SDPOKE 2000, 42 */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 2000.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 42.0);
+    gfa_bytecode_emit(bc, OP_SDPOKE);
+    gfa_bytecode_emit(bc, OP_END);
+
+    gfa_runtime_load(rt, bc);
+    gfa_runtime_execute(rt);
+    TEST_ASSERT(1, "SDPOKE 1000,65535 and SDPOKE 2000,42 do not crash");
+    gfa_runtime_shutdown(rt);
+
+    rt = gfa_runtime_init();
+    bc = gfa_bytecode_create();
+
+    /* SLPOKE 3000, 1234567 - no-crash stub test */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 3000.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 1234567.0);
+    gfa_bytecode_emit(bc, OP_SLPOKE);
+    /* SLPOKE 4000, 890123 */
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 4000.0);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 890123.0);
+    gfa_bytecode_emit(bc, OP_SLPOKE);
+    gfa_bytecode_emit(bc, OP_END);
+
+    gfa_runtime_load(rt, bc);
+    gfa_runtime_execute(rt);
+    TEST_ASSERT(1, "SLPOKE 3000,1234567 and SLPOKE 4000,890123 do not crash");
     gfa_runtime_shutdown(rt);
 }
 

@@ -14,6 +14,7 @@
 #include "sound.h"
 #include "tos.h"
 #include "gfx.h"
+#include "strings.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -33,7 +34,8 @@
 /* ------------------------------------------------------------------ */
 
 static int execute_instruction(gfa_runtime *rt);
-static void runtime_error(gfa_runtime *rt, int code, const char *msg);
+static int runtime_error(gfa_runtime *rt, int code, const char *msg);
+static char *format_using(const char *fmt, double value);
 
 /* ------------------------------------------------------------------ */
 /* Initialisation / Arret du runtime                                  */
@@ -226,6 +228,18 @@ void gfa_runtime_continue(gfa_runtime *rt)
             gfa_runtime_execute(rt);
         }
     }
+    /* Also support RESUME from error handler */
+    if (rt != NULL && rt->resume_ip >= 0 && rt->running == 0) {
+        rt->running = 1;
+        rt->stopped = 0;
+        rt->ip = rt->resume_ip;
+        rt->error_code = 0;
+        rt->fatal_error = 0;
+        gfa_error_clear();
+        if (rt->ip < rt->program->length) {
+            gfa_runtime_execute(rt);
+        }
+    }
 }
 
 int gfa_runtime_get_error(gfa_runtime *rt)
@@ -237,6 +251,378 @@ int gfa_runtime_get_error(gfa_runtime *rt)
 /* ------------------------------------------------------------------ */
 /* Execution d'une instruction                                        */
 /* ------------------------------------------------------------------ */
+
+/*
+ * format_using - GFA Basic PRINT USING format engine.
+ * Parses a format string and formats a numeric value accordingly.
+ *
+ * Supported patterns:
+ *   #          digit placeholder
+ *   .          decimal point
+ *   ,          thousands separator (in output)
+ *   **         fill leading with asterisks
+ *   $$         floating dollar sign
+ *   **$        fill leading with * and floating $
+ *   + / -      sign indicator (leading + or trailing -)
+ *   ^^^^       exponential format (E+00)
+ *   _          escape next character (literal)
+ *   other      literal character
+ */
+static char *format_using(const char *fmt, double value)
+{
+    char buf[256];
+    int buflen;
+    char number_part[128];
+    int num_len;
+    int leading_stars;
+    int floating_dollar;
+    int star_fill;
+    int int_digits;
+    int frac_digits;
+    int exp_format;
+    int i;
+    int fmt_len;
+    int pos;
+    int dot_pos;
+    int trail_minus;
+    int lead_plus;
+    double abs_val;
+    int is_neg;
+    char *result;
+    int outpos;
+
+    if (fmt == NULL || fmt[0] == '\0') {
+        return gfa_str_float(value);
+    }
+
+    fmt_len = (int)strlen(fmt);
+    leading_stars = 0;
+    floating_dollar = 0;
+    star_fill = 0;
+    int_digits = 0;
+    frac_digits = 0;
+    exp_format = 0;
+    trail_minus = 0;
+    lead_plus = 0;
+    dot_pos = -1;
+    buflen = 0;
+
+    /* Parse format string to count digits and flags */
+    i = 0;
+    pos = 0;
+    while (i < fmt_len && pos < 128) {
+        char c;
+        c = fmt[i];
+
+        if (c == '_' && i + 1 < fmt_len) {
+            /* Escape: next char is literal */
+            number_part[pos++] = fmt[i + 1];
+            i += 2;
+            continue;
+        }
+
+        if (c == '^') {
+            /* Caret sequence for exponential */
+            if (i + 3 < fmt_len && fmt[i+1] == '^' &&
+                fmt[i+2] == '^' && fmt[i+3] == '^') {
+                exp_format = 1;
+                i += 4;
+                continue;
+            }
+            number_part[pos++] = c;
+            i++;
+            continue;
+        }
+
+        /* Check for ** prefix */
+        if (i == 0 && c == '*' && i + 1 < fmt_len && fmt[i+1] == '*') {
+            number_part[pos++] = '*'; number_part[pos++] = '*';
+            leading_stars = 2;
+            star_fill = 1;
+            i += 2;
+            continue;
+        }
+
+        /* Check for $$ prefix */
+        if (c == '$' && i + 1 < fmt_len && fmt[i+1] == '$') {
+            number_part[pos++] = '$'; number_part[pos++] = '$';
+            floating_dollar = 2;
+            i += 2;
+            continue;
+        }
+
+        /* Check for **$ prefix */
+        if (c == '*' && i + 2 < fmt_len && fmt[i+1] == '*' &&
+            fmt[i+2] == '$') {
+            number_part[pos++] = '*'; number_part[pos++] = '*';
+            number_part[pos++] = '$';
+            leading_stars = 2;
+            star_fill = 1;
+            floating_dollar = 1;
+            i += 3;
+            continue;
+        }
+
+        /* Leading + sign */
+        if (i == 0 && c == '+') {
+            lead_plus = 1;
+            number_part[pos++] = c;
+            i++;
+            continue;
+        }
+
+        /* Trailing - sign (at end of format) */
+        if (c == '-') {
+            /* Check if it's at the end or followed only by trailing chars */
+            {
+                int after;
+                after = i + 1;
+                while (after < fmt_len && fmt[after] != '#') after++;
+                if (after == fmt_len) {
+                    trail_minus = 1;
+                    i++;
+                    continue;
+                }
+            }
+        }
+
+        if (c == '#') {
+            if (dot_pos < 0) {
+                int_digits++;
+            } else {
+                frac_digits++;
+            }
+            number_part[pos++] = c;
+            i++;
+            continue;
+        }
+
+        if (c == '.') {
+            dot_pos = pos;
+            number_part[pos++] = c;
+            i++;
+            continue;
+        }
+
+        if (c == ',') {
+            i++;
+            continue;
+        }
+
+        /* Any other character: literal */
+        number_part[pos++] = c;
+        i++;
+    }
+    number_part[pos] = '\0';
+    num_len = pos;
+
+    /* Handle exponential format */
+    if (exp_format) {
+        char exp_buf[64];
+        int exp_val;
+        double mant;
+        int mant_sign;
+        mant = value;
+        exp_val = 0;
+        mant_sign = (mant >= 0) ? 1 : -1;
+        if (mant == 0.0) {
+            exp_val = 0;
+        } else {
+            mant = (mant < 0) ? -mant : mant;
+            while (mant >= 10.0) { mant /= 10.0; exp_val++; }
+            while (mant < 1.0 && mant > 0.0) { mant *= 10.0; exp_val--; }
+        }
+        if (mant_sign < 0) mant = -mant;
+        sprintf(exp_buf, "%.*fE%+03d", frac_digits > 0 ? frac_digits : 4,
+                mant, exp_val);
+        result = gfa_str_new(exp_buf);
+        if (result == NULL) return NULL;
+        return result;
+    }
+
+    /* Build formatted output */
+    {
+        char raw_num[512];
+
+        abs_val = (value < 0) ? -value : value;
+        is_neg = (value < 0) ? 1 : 0;
+
+        /* Safety clamp: prevent buffer overflow from excessive fraction digits */
+        if (frac_digits > 99) frac_digits = 99;
+
+        /* Build formatted number: separate integer and fractional parts */
+        {
+            char int_digits_raw[64];
+            char frac_digits_raw[64];
+            int int_len;
+            int frac_len;
+            int int_idx;
+            int frac_idx;
+            int ip;
+            int past_decimal;
+            int dollar_pos;
+            int fmtpos;
+
+            if (frac_digits > 0) {
+                sprintf(raw_num, "%.*f", frac_digits, abs_val);
+            } else {
+                long int_part_long;
+                int_part_long = (long)abs_val;
+                sprintf(raw_num, "%ld", int_part_long);
+            }
+
+            /* Split at decimal point and extract digits */
+            {
+                int raw_len;
+                int dot_idx;
+                raw_len = (int)strlen(raw_num);
+                dot_idx = -1;
+                for (ip = 0; ip < raw_len; ip++) {
+                    if (raw_num[ip] == '.') { dot_idx = ip; break; }
+                }
+
+                /* Extract integer digits */
+                int_len = 0;
+                for (ip = 0; ip < (dot_idx >= 0 ? dot_idx : raw_len); ip++) {
+                    if (raw_num[ip] >= '0' && raw_num[ip] <= '9') {
+                        int_digits_raw[int_len++] = raw_num[ip];
+                    }
+                }
+                int_digits_raw[int_len] = '\0';
+
+                /* Extract fractional digits */
+                frac_len = 0;
+                if (dot_idx >= 0) {
+                    for (ip = dot_idx + 1; ip < raw_len; ip++) {
+                        if (raw_num[ip] >= '0' && raw_num[ip] <= '9') {
+                            frac_digits_raw[frac_len++] = raw_num[ip];
+                        }
+                    }
+                }
+                /* Pad fractional part with zeros on right */
+                while (frac_len < frac_digits) {
+                    frac_digits_raw[frac_len++] = '0';
+                }
+                frac_digits_raw[frac_len] = '\0';
+            }
+
+            /* Walk format template and fill output buffer */
+            outpos = 0;
+            int_idx = 0;
+            frac_idx = 0;
+            past_decimal = 0;
+            dollar_pos = -1;
+
+            /* Calculate integer padding: how many spaces before first digit */
+            {
+                int int_pad;
+                int_pad = int_digits - int_len;
+                if (int_pad < 0) int_pad = 0;
+
+                for (fmtpos = 0; fmtpos < num_len && outpos < 250; fmtpos++) {
+                    char fc;
+                    fc = number_part[fmtpos];
+
+                    if (fc == '.') {
+                        past_decimal = 1;
+                        buf[outpos++] = '.';
+                    } else if (fc == '#') {
+                        if (!past_decimal) {
+                            /* Integer position */
+                            if (int_pad > 0) {
+                                buf[outpos++] = ' ';
+                                int_pad--;
+                            } else if (int_idx < int_len) {
+                                buf[outpos++] = int_digits_raw[int_idx++];
+                            } else {
+                                buf[outpos++] = ' ';
+                            }
+                        } else {
+                            /* Fractional position */
+                            if (frac_idx < frac_len) {
+                                buf[outpos++] = frac_digits_raw[frac_idx++];
+                            } else {
+                                buf[outpos++] = '0';
+                            }
+                        }
+                    } else if (fc == '*' && star_fill) {
+                        buf[outpos++] = '*';
+                    } else if (fc == '$' && floating_dollar > 0) {
+                        buf[outpos++] = '$';
+                        dollar_pos = outpos - 1;
+                    } else {
+                        buf[outpos++] = fc;
+                    }
+                }
+            }
+
+            /* Star fill: replace leading * positions */
+            if (star_fill) {
+                /* Replace stars with spaces or digits */
+                int star_count;
+                star_count = leading_stars;
+                if (floating_dollar) star_count = 2;  /* **$ = 2 stars */
+
+                /* Stars fill from the rightmost star position */
+                for (i = 0; i < outpos && star_count > 0; i++) {
+                    if (buf[i] == '*') {
+                        buf[i] = ' ';
+                        star_count--;
+                    }
+                }
+            }
+
+            /* Floating dollar: move $ next to first digit */
+            if (floating_dollar) {
+                /* Find first non-space, non-star digit */
+                int first_dig;
+                first_dig = -1;
+                for (i = 0; i < outpos; i++) {
+                    if (buf[i] >= '0' && buf[i] <= '9') {
+                        first_dig = i;
+                        break;
+                    }
+                }
+                if (first_dig >= 1 && dollar_pos >= 0) {
+                    /* Shift right part to make room for $ before first digit */
+                    buf[dollar_pos] = ' ';
+                    buf[first_dig - 1] = '$';
+                }
+            }
+        }
+        buf[buflen > 0 ? buflen : outpos] = '\0';
+        buflen = (outpos > 0) ? outpos : buflen;
+    }
+
+    /* Handle sign */
+    {
+        char final_buf[256];
+        int fi;
+        fi = 0;
+
+        /* For leading + format, replace + with - if negative */
+        for (i = 0; i < buflen && fi < 250; i++) {
+            if (is_neg && buf[i] == '+' && lead_plus) {
+                final_buf[fi++] = '-';
+            } else {
+                final_buf[fi++] = buf[i];
+            }
+        }
+
+        /* For trailing minus format, append sign at end */
+        if (trail_minus && fi < 249) {
+            if (is_neg)
+                final_buf[fi++] = '-';
+            else
+                final_buf[fi++] = ' ';
+        }
+
+        final_buf[fi] = '\0';
+        result = gfa_str_new(final_buf);
+    }
+
+    return result;
+}
 
 static int execute_instruction(gfa_runtime *rt)
 {
@@ -277,8 +663,9 @@ static int execute_instruction(gfa_runtime *rt)
         case OP_PUSH_VAR:
             var = (gfa_variable *)inst->operand.ptr_val;
             if (var == NULL) {
-                runtime_error(rt, 42, "Variable not found");
-                return -1;
+                if (!runtime_error(rt, 42, "Variable not found"))
+                    return -1;
+                return 0;
             }
             switch (var->type) {
                 case GFA_VAR_BOOL:
@@ -426,6 +813,15 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_SWAP:
+            /*
+             * Echange les deux valeurs au sommet de la pile.
+             * Note: si les deux valeurs sont des chaines avec owns_string=1
+             * et partagent le meme pointeur (ex: viennent de la meme
+             * variable), le swap est sans danger car les pointeurs sont
+             * simplement echanges (pas de double-free).
+             * Structure copy is safe because we swap the entire gfa_value
+             * structs, not just the string pointers.
+             */
             if (rt->sp >= 2) {
                 gfa_value tmp;
                 tmp = rt->value_stack[rt->sp - 1];
@@ -493,9 +889,12 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     double denom = gfa_value_to_float(v2);
                     if (fabs(denom) < 1.0e-15) {
-                        runtime_error(rt, 0, "Division by zero");
+                        if (!runtime_error(rt, 0, "Division by zero")) {
+                            os_mem_free(v1); os_mem_free(v2);
+                            return -1;
+                        }
                         os_mem_free(v1); os_mem_free(v2);
-                        return -1;
+                        return 0;
                     }
                     gfa_value_push_float(rt, gfa_value_to_float(v1) / denom);
                 }
@@ -509,9 +908,12 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     lval = gfa_value_to_long(v2);
                     if (lval == 0) {
-                        runtime_error(rt, 0, "Division by zero");
+                        if (!runtime_error(rt, 0, "Division by zero")) {
+                            os_mem_free(v1); os_mem_free(v2);
+                            return -1;
+                        }
                         os_mem_free(v1); os_mem_free(v2);
-                        return -1;
+                        return 0;
                     }
                     gfa_value_push_long(rt, gfa_value_to_long(v1) % lval);
                 }
@@ -525,9 +927,12 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     lval = gfa_value_to_long(v2);
                     if (lval == 0) {
-                        runtime_error(rt, 0, "Division by zero");
+                        if (!runtime_error(rt, 0, "Division by zero")) {
+                            os_mem_free(v1); os_mem_free(v2);
+                            return -1;
+                        }
                         os_mem_free(v1); os_mem_free(v2);
-                        return -1;
+                        return 0;
                     }
                     gfa_value_push_long(rt, gfa_value_to_long(v1) / lval);
                 }
@@ -631,6 +1036,23 @@ static int execute_instruction(gfa_runtime *rt)
                 v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt);
                 if (v1 && v2) {
                     bval = (gfa_value_to_float(v1) >= gfa_value_to_float(v2));
+                    gfa_value_push_bool(rt, bval ? -1 : 0);
+                }
+                os_mem_free(v1); os_mem_free(v2);
+            }
+            break;
+
+        case OP_APPROX_EQ:
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    if (v1->type == GFA_VAL_STRING && v2->type == GFA_VAL_STRING) {
+                        bval = (strcmp(v1->data.s ? v1->data.s : "",
+                                       v2->data.s ? v2->data.s : "") == 0);
+                    } else {
+                        double diff = gfa_value_to_float(v1) - gfa_value_to_float(v2);
+                        bval = fabs(diff) < 1.0e-10;
+                    }
                     gfa_value_push_bool(rt, bval ? -1 : 0);
                 }
                 os_mem_free(v1); os_mem_free(v2);
@@ -745,14 +1167,17 @@ static int execute_instruction(gfa_runtime *rt)
                 rt->ip = (int)operand;
                 return 0;
             }
-            runtime_error(rt, 93, "Stack overflow");
-            return -1;
+            if (!runtime_error(rt, 93, "Stack overflow"))
+                return -1;
+            return 0;
 
         case OP_RET:
+            fprintf(stderr, "DEBUG OP_RET: call_depth=%d\n", rt->call_depth);
             if (rt->call_depth > 0) {
                 gfa_call_frame *frame;
                 int i;
                 frame = &rt->call_stack[--rt->call_depth];
+                fprintf(stderr, "DEBUG OP_RET: return_ip=%d\n", frame->return_ip);
                 rt->ip = frame->return_ip;
                 while (rt->sp > frame->return_sp && rt->sp > 0) {
                     gfa_value_discard(rt, 1);
@@ -931,7 +1356,7 @@ static int execute_instruction(gfa_runtime *rt)
                 gfa_value *arg1, *arg2, *arg3;
                 double result_f;
                 os_int32 result_l;
-                const char *result_s;
+                char *result_s;
 
                 func_tok = (gfa_token_type)operand;
                 arg1 = arg2 = arg3 = NULL;
@@ -1019,6 +1444,30 @@ static int execute_instruction(gfa_runtime *rt)
                             gfa_value_push_long(rt, result_l ? -1 : 0);
                             os_mem_free(arg1);
                         }
+                        break;
+
+                    /* Bits - 2 arguments */
+                    case TOK_BTST: case TOK_BSET: case TOK_BCLR: case TOK_BCHG:
+                    case TOK_SHL: case TOK_SHR: case TOK_ROL: case TOK_ROR:
+                        arg2 = gfa_value_pop(rt);
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1 && arg2) {
+                            os_int32 a = gfa_value_to_long(arg1);
+                            os_int32 b = gfa_value_to_long(arg2);
+                            switch (func_tok) {
+                                case TOK_BTST: result_l = (os_int32)gfa_btst(a, (int)b); break;
+                                case TOK_BSET: result_l = (os_int32)gfa_bset(a, (int)b); break;
+                                case TOK_BCLR: result_l = (os_int32)gfa_bclr(a, (int)b); break;
+                                case TOK_BCHG: result_l = (os_int32)gfa_bchg(a, (int)b); break;
+                                case TOK_SHL:  result_l = (os_int32)gfa_shl(a, (int)b); break;
+                                case TOK_SHR:  result_l = (os_int32)gfa_shr(a, (int)b); break;
+                                case TOK_ROL:  result_l = (os_int32)gfa_rol(a, (int)b); break;
+                                case TOK_ROR:  result_l = (os_int32)gfa_ror(a, (int)b); break;
+                                default: break;
+                            }
+                            gfa_value_push_long(rt, result_l);
+                        }
+                        os_mem_free(arg1); os_mem_free(arg2);
                         break;
 
                     /* Chaines */
@@ -1138,6 +1587,107 @@ static int execute_instruction(gfa_runtime *rt)
                         if (arg1) {
                             result_s = gfa_oct(gfa_value_to_long(arg1), 11);
                             gfa_value_push_string(rt, result_s, 1);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    /* Conversion binaire <-> chaine (donnees typees) */
+                    case TOK_MKI_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            result_s = gfa_mki(gfa_value_to_long(arg1));
+                            gfa_value_push_string(rt, result_s, 1);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_MKL_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            result_s = gfa_mkl(gfa_value_to_long(arg1));
+                            gfa_value_push_string(rt, result_s, 1);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_MKS_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            result_s = gfa_mks(gfa_value_to_float(arg1));
+                            gfa_value_push_string(rt, result_s, 1);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_MKF_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            result_s = gfa_mkf(gfa_value_to_float(arg1));
+                            gfa_value_push_string(rt, result_s, 1);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_MKD_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            result_s = gfa_mkd(gfa_value_to_float(arg1));
+                            gfa_value_push_string(rt, result_s, 1);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_CVI_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            gfa_value_push_float(rt, (double)(int)gfa_cvi(s));
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_CVL_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            gfa_value_push_long(rt, gfa_cvl(s));
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_CVS_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            gfa_value_push_float(rt, gfa_cvs(s));
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_CVF_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            gfa_value_push_float(rt, gfa_cvf(s));
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    case TOK_CVD_TOK:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            gfa_value_push_float(rt, gfa_cvd(s));
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
                         break;
@@ -1278,6 +1828,389 @@ static int execute_instruction(gfa_runtime *rt)
                         gfa_value_push_long(rt, 0);
                         break;
 
+                    /* ========================================== */
+                    /* Priorite A - fonctions runtime uniquement  */
+                    /* ========================================== */
+
+                    /* VAL? - compter les caracteres valides */
+                    case TOK_VAL_COUNT:
+                        arg1 = gfa_value_pop(rt);
+                        if (arg1) {
+                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                            result_f = (double)gfa_val_count(s);
+                            gfa_value_push_float(rt, result_f);
+                            if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                            os_mem_free(arg1);
+                        }
+                        break;
+
+                    /* INPUT$ - lire depuis un fichier ou stdin */
+                    case TOK_INPUT_TOK:
+                        /* INPUT$(count) ou INPUT$(#chan, count) */
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg2) {
+                                int count = (int)gfa_value_to_long(arg2);
+                                int chan = (int)gfa_value_to_long(arg1);
+                                if (count > 256) count = 256;
+                                if (count < 0) count = 0;
+                                {
+                                    char *buf = (char *)os_mem_alloc((size_t)(count + 1));
+                                    if (buf) {
+                                        int nread;
+                                        nread = gfa_input_channel(chan, buf, count);
+                                        buf[nread] = '\0';
+                                        result_s = gfa_str_new(buf);
+                                        os_mem_free(buf);
+                                        gfa_value_push_string(rt, result_s, 1);
+                                    } else {
+                                        gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                    }
+                                }
+                            }
+                            if (arg1) { if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s); os_mem_free(arg1); }
+                            if (arg2) { if (arg2->owns_string && arg2->data.s) os_mem_free(arg2->data.s); os_mem_free(arg2); }
+                        } else if (rt->sp >= 1) {
+                            /* INPUT$(count) lit depuis stdin */
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                int count = (int)gfa_value_to_long(arg1);
+                                if (count > 256) count = 256;
+                                if (count < 0) count = 0;
+                                if (count > 0) {
+                                    char *buf = (char *)os_mem_alloc((size_t)(count + 1));
+                                    if (buf) {
+                                        int i;
+                                        for (i = 0; i < count; i++) {
+                                            buf[i] = (char)os_con_input_char();
+                                        }
+                                        buf[count] = '\0';
+                                        result_s = gfa_str_new(buf);
+                                        os_mem_free(buf);
+                                        gfa_value_push_string(rt, result_s, 1);
+                                    } else {
+                                        gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                    }
+                                } else {
+                                    gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                }
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        } else {
+                            gfa_value_push_string(rt, gfa_str_new(""), 1);
+                        }
+                        break;
+
+                    /* INPMID$ - INSTR + MID$ combine */
+                    case TOK_INPMID:
+                        /* Stack: [haystack, needle, start] -> pop en ordre inverse */
+                        if (rt->sp >= 3) {
+                            gfa_value *a3, *a2, *a1;
+                            a3 = gfa_value_pop(rt); /* start */
+                            a2 = gfa_value_pop(rt); /* needle */
+                            a1 = gfa_value_pop(rt); /* haystack */
+                            if (a1 && a2 && a3) {
+                                const char *hs = (a1->type == GFA_VAL_STRING && a1->data.s) ? a1->data.s : "";
+                                const char *nd = (a2->type == GFA_VAL_STRING && a2->data.s) ? a2->data.s : "";
+                                int start = (int)gfa_value_to_long(a3);
+                                int pos = gfa_instr(start, hs, nd);
+                                if (pos > 0) {
+                                    result_s = gfa_mid(hs, pos, (int)strlen(hs) - pos + 1);
+                                    gfa_value_push_string(rt, result_s, 1);
+                                } else {
+                                    gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                }
+                            }
+                            if (a1) { if (a1->owns_string && a1->data.s) os_mem_free(a1->data.s); os_mem_free(a1); }
+                            if (a2) { if (a2->owns_string && a2->data.s) os_mem_free(a2->data.s); os_mem_free(a2); }
+                            if (a3) { if (a3->owns_string && a3->data.s) os_mem_free(a3->data.s); os_mem_free(a3); }
+                        } else if (rt->sp >= 2) {
+                            gfa_value *a2, *a1;
+                            a2 = gfa_value_pop(rt); /* needle */
+                            a1 = gfa_value_pop(rt); /* haystack */
+                            if (a1 && a2) {
+                                const char *hs = (a1->type == GFA_VAL_STRING && a1->data.s) ? a1->data.s : "";
+                                const char *nd = (a2->type == GFA_VAL_STRING && a2->data.s) ? a2->data.s : "";
+                                int pos = gfa_instr(1, hs, nd);
+                                if (pos > 0) {
+                                    result_s = gfa_mid(hs, pos, (int)strlen(hs) - pos + 1);
+                                    gfa_value_push_string(rt, result_s, 1);
+                                } else {
+                                    gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                }
+                            }
+                            if (a1) { if (a1->owns_string && a1->data.s) os_mem_free(a1->data.s); os_mem_free(a1); }
+                            if (a2) { if (a2->owns_string && a2->data.s) os_mem_free(a2->data.s); os_mem_free(a2); }
+                        } else {
+                            gfa_value_push_string(rt, gfa_str_new(""), 1);
+                        }
+                        break;
+
+                    /* DIR$ - premier fichier du repertoire */
+                    case TOK_DIR_TOK:
+                    case TOK_DIR_TOK2:
+                        {
+                            const char *pattern = "*.*";
+                            if (rt->sp >= 1) {
+                                arg1 = gfa_value_pop(rt);
+                                if (arg1 && arg1->type == GFA_VAL_STRING && arg1->data.s) {
+                                    pattern = arg1->data.s;
+                                }
+                            }
+                            {
+                                os_file_info info;
+                                os_mem_set(&info, 0, sizeof(info));
+                                if (os_dir_first(pattern, 0, &info) == 0 && info.name[0] != '\0') {
+                                    gfa_value_push_string(rt, gfa_str_new(info.name), 1);
+                                } else {
+                                    gfa_value_push_string(rt, gfa_str_new(""), 1);
+                                }
+                            }
+                            if (arg1) { if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s); os_mem_free(arg1); }
+                        }
+                        break;
+
+                    /* DFREE - espace disque libre (octets) */
+                    case TOK_DFREE:
+                        /* Pop argument optionnel (drive) */
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                result_l = os_fs_free((int)gfa_value_to_long(arg1));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            } else {
+                                result_l = os_fs_free(0);
+                            }
+                        } else {
+                            result_l = os_fs_free(0);
+                        }
+                        gfa_value_push_long(rt, result_l);
+                        break;
+
+                    /* TYPE - type de variable (0=float, 1=string) */
+                    case TOK_TYPE_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                if (arg1->type == GFA_VAL_STRING)
+                                    gfa_value_push_float(rt, 1.0);
+                                else
+                                    gfa_value_push_float(rt, 0.0);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_float(rt, 0.0);
+                            }
+                        } else {
+                            gfa_value_push_float(rt, 0.0);
+                        }
+                        break;
+
+                    /* PAUSE - attendre une touche */
+                    case TOK_PAUSE:
+                        /* PAUSE delay (en 1/50s) */
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                int delay_ms = (int)(gfa_value_to_float(arg1) * 20.0);
+                                if (delay_ms < 0) delay_ms = 0;
+                                os_time_delay((os_int32)delay_ms);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* DELAY - pause en millisecondes */
+                    case TOK_DELAY:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                int delay_ms = (int)gfa_value_to_long(arg1);
+                                if (delay_ms < 0) delay_ms = 0;
+                                os_time_delay((os_int32)delay_ms);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* RANDOMIZE - initialiser le generateur aleatoire */
+                    case TOK_RANDOMIZE:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_randomize((os_int32)gfa_value_to_long(arg1));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        } else {
+                            gfa_randomize(1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* Stubs: MOUSE, STICK/STRIG, PAD, LPEN, TOUCH, SPRITE, KEY* */
+                    case TOK_MOUSE:     case TOK_MOUSEX:    case TOK_MOUSEY:
+                    case TOK_MOUSEK:    case TOK_SETMOUSE:
+                    case TOK_STICK:     case TOK_STRIG:     case TOK_PADX:
+                    case TOK_PADY:      case TOK_PADT:      case TOK_LPENX:
+                    case TOK_LPENY:     case TOK_TOUCH:
+                    case TOK_STICK_TOK: case TOK_STRIG_TOK: case TOK_PAD_TOK:
+                    case TOK_TOUCH_TOK: case TOK_LPEN_TOK:  case TOK_SPRITE:
+                    case TOK_KEYDEF:    case TOK_KEYGET:    case TOK_KEYLOOK:
+                    case TOK_KEYTEST:   case TOK_KEYPRESS:  case TOK_KEYPAD:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* TIMER - nombre de ticks depuis boot (1 tick = 1/200s) */
+                    case TOK_TIMER_TOK:
+                        gfa_value_push_long(rt, os_time_ticks());
+                        break;
+
+                    /* DATE$ - date systeme */
+                    case TOK_DATE_TOK:
+                        {
+                            const char *d = os_time_get_date(0);
+                            gfa_value_push_string(rt, gfa_str_new(d ? d : ""), 1);
+                        }
+                        break;
+
+                    /* TIME$ - heure systeme */
+                    case TOK_TIME_TOK:
+                        {
+                            const char *t = os_time_get_time();
+                            gfa_value_push_string(rt, gfa_str_new(t ? t : ""), 1);
+                        }
+                        break;
+
+                    /* _C / _X / _Y - couleur courante, curseur X, curseur Y */
+                    case TOK__C:
+                        gfa_value_push_long(rt, (os_int32)rt->current_color);
+                        break;
+                    case TOK__X:
+                        gfa_value_push_long(rt, (os_int32)rt->cursor_x);
+                        break;
+                    case TOK__Y:
+                        gfa_value_push_long(rt, (os_int32)rt->cursor_y);
+                        break;
+
+                    /* BYTE{} / CARD{} / WORD{} / LONG{} / SINGLE{} / DOUBLE{} */
+                    /* Typed memory access (PEEK-like) */
+                    case TOK_BYTE_TOK:
+                    case TOK_CARD:
+                    case TOK_WORD_TOK:
+                    case TOK_LONG_TOK:
+                    case TOK_SINGLE:
+                    case TOK_DOUBLE_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, 0);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* HIMEM / FRE() - memoire */
+                    case TOK_HIMEM:
+                        /* HIMEM retourne l'adresse haute memoire */
+                        gfa_value_push_long(rt, (os_int32)(16 * 1024 * 1024));
+                        break;
+                    case TOK_FRE:
+                        /* FRE() - stub: toujours retourne 256 Mo.
+                         * FRE(-1) devrait forcer le garbage collector. */
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) { if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s); os_mem_free(arg1); }
+                        }
+                        gfa_value_push_long(rt, (os_int32)(256 * 1024 * 1024));
+                        break;
+
+                    /* EXIST - teste existence fichier/repertoire */
+                    case TOK_EXIST:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                const char *name = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                                result_l = (os_int32)os_fs_exist(name);
+                                gfa_value_push_long(rt, result_l);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* SETTIME time$ [, date$] — règle date et heure système */
+                    case TOK_SETTIME:
+                        /* time$ est obligatoire, date$ optionnel sur la pile */
+                        if (rt->sp >= 1) {
+                            arg2 = gfa_value_pop(rt);
+                            if (rt->sp >= 1) {
+                                arg1 = gfa_value_pop(rt);
+                            } else {
+                                arg1 = arg2;
+                                arg2 = NULL;
+                            }
+                            if (arg1) {
+                                const char *time_str = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
+                                const char *date_str = (arg2 && arg2->type == GFA_VAL_STRING && arg2->data.s) ? arg2->data.s : NULL;
+                                result_l = (os_int32)os_time_set_datetime(time_str, date_str);
+                                gfa_value_push_long(rt, result_l);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                                if (arg2) {
+                                    if (arg2->owns_string && arg2->data.s) os_mem_free(arg2->data.s);
+                                    os_mem_free(arg2);
+                                }
+                            } else {
+                                if (arg2) {
+                                    if (arg2->owns_string && arg2->data.s) os_mem_free(arg2->data.s);
+                                    os_mem_free(arg2);
+                                }
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* ~ (tilde, NOT bitwise) */
+                    case TOK_TILDE:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                result_l = ~gfa_value_to_long(arg1);
+                                gfa_value_push_long(rt, result_l);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
+
+                    /* Stubs: VOID, STE/TT, OB_X/Y/W/H */
+                    case TOK_VOID:
+                    case TOK_STE:    /* 0 = ST, pas STE */
+                    case TOK_TT:     /* 0 = pas TT/Falcon */
+                    case TOK_OB_X:   case TOK_OB_Y:
+                    case TOK_OB_W:   case TOK_OB_H:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
                     /* Non implemente */
                     default:
                         gfa_value_push_long(rt, 0);
@@ -1299,11 +2232,85 @@ static int execute_instruction(gfa_runtime *rt)
                     } else {
                         char *s;
                         s = gfa_str_float(gfa_value_to_float(v1));
-                        os_con_output_string(s);
-                        os_mem_free(s);
+                        if (s != NULL) {
+                            os_con_output_string(s);
+                            os_mem_free(s);
+                        }
+                    }
+                    if (v1->owns_string && v1->data.s != NULL) {
+                        os_mem_free(v1->data.s);
                     }
                 }
                 os_mem_free(v1);
+            }
+            break;
+
+        case OP_PRINT_AT:
+            /* Stack: [x] [y] [value] — top = value, then y, then x */
+            if (rt->sp >= 3) {
+                gfa_value *v_exp, *v_y, *v_x;
+                v_exp = gfa_value_pop(rt);
+                v_y   = gfa_value_pop(rt);
+                v_x   = gfa_value_pop(rt);
+                if (v_x != NULL && v_y != NULL) {
+                    rt->cursor_x = (int)gfa_value_to_long(v_x);
+                    rt->cursor_y = (int)gfa_value_to_long(v_y);
+                    os_con_cursor_goto(rt->cursor_x, rt->cursor_y);
+                }
+                if (v_exp != NULL) {
+                    if (v_exp->type == GFA_VAL_STRING) {
+                        os_con_output_string(v_exp->data.s ? v_exp->data.s : "");
+                    } else {
+                        char *s;
+                        s = gfa_str_float(gfa_value_to_float(v_exp));
+                        if (s != NULL) {
+                            os_con_output_string(s);
+                            os_mem_free(s);
+                        }
+                    }
+                }
+                os_con_output_char('\n');
+                if (v_x != NULL && v_x->owns_string && v_x->data.s != NULL) {
+                    os_mem_free(v_x->data.s);
+                }
+                if (v_y != NULL && v_y->owns_string && v_y->data.s != NULL) {
+                    os_mem_free(v_y->data.s);
+                }
+                if (v_exp != NULL && v_exp->owns_string && v_exp->data.s != NULL) {
+                    os_mem_free(v_exp->data.s);
+                }
+                if (v_x)   os_mem_free(v_x);
+                if (v_y)   os_mem_free(v_y);
+                if (v_exp) os_mem_free(v_exp);
+            }
+            break;
+
+        case OP_PRINT_USING:
+            /* Stack: [format$] [value] — top = value, then format$ */
+            if (rt->sp >= 2) {
+                gfa_value *v_val, *v_fmt;
+                v_val = gfa_value_pop(rt);
+                v_fmt = gfa_value_pop(rt);
+                if (v_fmt != NULL && v_val != NULL) {
+                    const char *fmt_str;
+                    char *formatted;
+                    fmt_str = (v_fmt->type == GFA_VAL_STRING && v_fmt->data.s)
+                              ? v_fmt->data.s : "";
+                    formatted = format_using(fmt_str, gfa_value_to_float(v_val));
+                    if (formatted != NULL) {
+                        os_con_output_string(formatted);
+                        os_mem_free(formatted);
+                    }
+                }
+                os_con_output_char('\n');
+                if (v_val != NULL && v_val->owns_string && v_val->data.s != NULL) {
+                    os_mem_free(v_val->data.s);
+                }
+                if (v_fmt != NULL && v_fmt->owns_string && v_fmt->data.s != NULL) {
+                    os_mem_free(v_fmt->data.s);
+                }
+                if (v_val) os_mem_free(v_val);
+                if (v_fmt) os_mem_free(v_fmt);
             }
             break;
 
@@ -1439,10 +2446,18 @@ static int execute_instruction(gfa_runtime *rt)
                     } else {
                         char *s;
                         s = gfa_str_float(gfa_value_to_float(v1));
-                        gfa_print_channel(channel, s);
-                        os_mem_free(s);
+                        if (s != NULL) {
+                            gfa_print_channel(channel, s);
+                            os_mem_free(s);
+                        }
                     }
                     gfa_print_channel(channel, "\n");
+                }
+                if (v1 != NULL && v1->owns_string && v1->data.s != NULL) {
+                    os_mem_free(v1->data.s);
+                }
+                if (chan_val != NULL && chan_val->owns_string && chan_val->data.s != NULL) {
+                    os_mem_free(chan_val->data.s);
                 }
                 if (v1) os_mem_free(v1);
                 if (chan_val) os_mem_free(chan_val);
@@ -1688,7 +2703,8 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_POKE:
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) os_mem_free(v1); if (v2) os_mem_free(v2); }
+            /* STUB: POKE addr, byte - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
             break;
 
         case OP_DPEEK:
@@ -1696,7 +2712,8 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_DPOKE:
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) os_mem_free(v1); if (v2) os_mem_free(v2); }
+            /* STUB: DPOKE addr, word - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
             break;
 
         case OP_LPEEK:
@@ -1704,12 +2721,32 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_LPOKE:
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) os_mem_free(v1); if (v2) os_mem_free(v2); }
+            /* STUB: LPOKE addr, long - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            break;
+
+        case OP_SPOKE:
+            /* STUB: SPOKE addr, byte - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            break;
+
+        case OP_SDPOKE:
+            /* STUB: SDPOKE addr, word - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            break;
+
+        case OP_SLPOKE:
+            /* STUB: SLPOKE addr, long - memory write not yet implemented */
+            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
             break;
 
         case OP_ON_ERROR:
-            /* operand = string index for error label */
-            { int str_idx = (int)operand; (void)str_idx; }
+            /* operand = resolved IP address of error handler label */
+            fprintf(stderr, "DEBUG OP_ON_ERROR: operand=%ld error_label=%d\n",
+                    (long)operand, (int)operand);
+            rt->error_label = (int)operand;
+            rt->on_error_active = (operand >= 0) ? 1 : 0;
+            gfa_on_error_gosub((int)operand);
             break;
 
         case OP_EVERY:
@@ -1727,6 +2764,7 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_END:
+            fprintf(stderr, "DEBUG OP_END at ip=%d, running=%d\n", rt->ip, rt->running);
             rt->running = 0;
             return 0;
 
@@ -1760,11 +2798,48 @@ static int execute_instruction(gfa_runtime *rt)
             if (rt->sp > 0) {
                 v1 = gfa_value_pop(rt);
                 if (v1) {
-                    gfa_error_raise((int)gfa_value_to_long(v1));
+                    int code = (int)gfa_value_to_long(v1);
                     os_mem_free(v1);
+                    if (!runtime_error(rt, code, gfa_error_get_string(code))) {
+                        return -1;
+                    }
+                    /* runtime_error jumped to handler, resume_ip is set */
+                    return 0;
                 }
             }
             break;
+
+        case OP_FATAL:
+            /* Stack: [error_code] ; raise fatal error (blocks RESUME) */
+            if (rt->sp > 0) {
+                v1 = gfa_value_pop(rt);
+                if (v1) {
+                    int code = (int)gfa_value_to_long(v1);
+                    os_mem_free(v1);
+                    rt->fatal_error = 1;
+                    if (!runtime_error(rt, code, gfa_error_get_string(code))) {
+                        return -1;
+                    }
+                    return 0;
+                }
+            }
+            break;
+
+        case OP_RESUME:
+            /* operand: 0 = RESUME, 1 = RESUME NEXT */
+            if (rt->fatal_error) {
+                runtime_error(rt, 6, "RESUME after FATAL not allowed");
+                return -1;
+            }
+            if (rt->resume_ip >= 0) {
+                rt->ip = rt->resume_ip + ((operand != 0) ? 1 : 0);
+                rt->error_code = 0;
+                rt->fatal_error = 0;
+                gfa_error_clear();
+                return 0;
+            }
+            runtime_error(rt, 8, "RESUME without error handler");
+            return -1;
 
         case OP_GEMDOS:
             /* Stack: [fn] [arg1] [arg2] ; call GEMDOS */
@@ -1877,8 +2952,9 @@ static int execute_instruction(gfa_runtime *rt)
 
         default:
             /* Opcode inconnu */
-            runtime_error(rt, 9, "Function or command not yet implemented");
-            return -1;
+            if (!runtime_error(rt, 9, "Function or command not yet implemented"))
+                return -1;
+            return 0;
     }
 
     /* Avancer le pointeur d'instruction (sauf si deja modifie) */
@@ -1891,11 +2967,18 @@ static int execute_instruction(gfa_runtime *rt)
 /* Gestion des erreurs                                                */
 /* ------------------------------------------------------------------ */
 
-static void runtime_error(gfa_runtime *rt, int code, const char *msg)
+/*
+ * runtime_error - Raise a runtime error.
+ * Returns 1 if execution jumped to an ON ERROR handler, 0 otherwise.
+ * When jumping: saves resume_ip, pushes call frame, sets ip to handler.
+ * Caller should return 0 after a successful jump, or -1 otherwise.
+ */
+static int runtime_error(gfa_runtime *rt, int code, const char *msg)
 {
-    (void)msg;
+    if (rt == NULL) return 0;
 
-    if (rt == NULL) return;
+    fprintf(stderr, "DEBUG runtime_error: code=%d on_error_active=%d error_label=%d fatal=%d\n",
+            code, rt->on_error_active, rt->error_label, rt->fatal_error);
 
     rt->error_code = code;
 
@@ -1905,6 +2988,10 @@ static void runtime_error(gfa_runtime *rt, int code, const char *msg)
             char buf[32];
             sprintf(buf, "%d", code);
             os_con_output_string(buf);
+        }
+        os_con_output_string(": ");
+        if (msg != NULL) {
+            os_con_output_string(msg);
         }
         os_con_output_string(" at line ");
         {
@@ -1917,4 +3004,35 @@ static void runtime_error(gfa_runtime *rt, int code, const char *msg)
 
     /* Declencher ON ERROR GOSUB si actif */
     gfa_error_raise(code);
+
+    /* If ON ERROR is active and we have a valid error label, jump to it */
+    if (rt->on_error_active && rt->error_label >= 0 && !rt->fatal_error) {
+        gfa_call_frame *frame;
+
+        /* Save resume IP (current instruction that caused the error) */
+        rt->resume_ip = rt->ip;
+        fprintf(stderr, "DEBUG runtime_error: jumping to handler at ip=%d, resume_ip=%d\n",
+                rt->error_label, rt->ip);
+
+        /* Push a call frame so RETURN goes back */
+        if (rt->call_depth < GFA_MAX_CALL_DEPTH) {
+            frame = &rt->call_stack[rt->call_depth++];
+            frame->return_ip = rt->ip + 1;
+            frame->return_sp = rt->sp;
+            frame->is_gosub  = 1;
+            frame->proc_index = 0;
+            frame->saved_count = 0;
+            fprintf(stderr, "DEBUG runtime_error: pushed call frame, return_ip=%d\n", frame->return_ip);
+        }
+
+        /* Jump to error handler.
+         * The caller (OP_ERROR etc.) returns 0, skipping post-switch rt->ip++,
+         * so we set ip directly to the label address. */
+        rt->ip = rt->error_label;
+        fprintf(stderr, "DEBUG runtime_error: set ip=%d\n", rt->ip);
+
+        return 1;  /* Successfully jumped to handler */
+    }
+
+    return 0;  /* No handler, program will stop */
 }

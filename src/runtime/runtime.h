@@ -13,6 +13,7 @@
 #include "os_layer.h"
 #include "strings.h"
 #include "math_builtin.h"
+#include "bit_ops.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -166,6 +167,7 @@ typedef enum {
     OP_LE           = 23,
     OP_GT           = 24,
     OP_GE           = 25,
+    OP_APPROX_EQ    = 26,   /* == comparaison approximative */
 
     /* Logique */
     OP_AND          = 30,
@@ -216,12 +218,17 @@ typedef enum {
     OP_DPOKE        = 93,
     OP_LPEEK        = 94,
     OP_LPOKE        = 95,
+    OP_SPOKE        = 96,
+    OP_SDPOKE       = 97,
+    OP_SLPOKE       = 98,
 
     /* Evenements */
     OP_EVERY        = 100,
     OP_AFTER        = 101,
     OP_ON_ERROR     = 102,
     OP_ERROR        = 103,
+    OP_RESUME       = 104,
+    OP_FATAL        = 105,
 
     /* Son */
     OP_SOUND        = 110,
@@ -243,6 +250,8 @@ typedef enum {
     OP_BSAVE        = 151,  /* BSAVE filename, start, end             */
     OP_BGET         = 152,  /* BGET #channel, addr, count             */
     OP_BPUT         = 153,  /* BPUT #channel, addr, count             */
+    OP_PRINT_AT     = 156,  /* PRINT AT(x,y); expr                    */
+    OP_PRINT_USING  = 157,  /* PRINT USING fmt$; expr                 */
     OP_ON_GOTO      = 154,  /* ON expr GOTO label1, label2, ...       */
     OP_ON_GOSUB     = 155,  /* ON expr GOSUB label1, label2, ...      */
 
@@ -338,6 +347,8 @@ typedef struct gfa_runtime {
     int             error_label;
     int             on_error_active;
     int             on_break_label;
+    int             resume_ip;       /* IP to resume after error handler */
+    int             fatal_error;     /* 1 if FATAL was called, blocks RESUME */
     int             break_pending;
     int             every_active;
     int             every_ticks;

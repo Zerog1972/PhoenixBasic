@@ -285,8 +285,15 @@ void gfa_after_stop(void)
 
 void gfa_on_break_gosub(int label_index)
 {
-    (void)label_index;
-    /* Le callback sera gere par le runtime */
+    /* Store the break handler label index */
+    g_events.break_pending = 0;
+    /* The runtime will use this label when a break occurs */
+    if (g_events.callbacks[GFA_EVENT_ON_BREAK] != NULL) {
+        g_events.callbacks[GFA_EVENT_ON_BREAK](
+            GFA_EVENT_ON_BREAK,
+            (os_int32)label_index,
+            g_events.callback_data[GFA_EVENT_ON_BREAK]);
+    }
 }
 
 void gfa_on_break_cont(void)

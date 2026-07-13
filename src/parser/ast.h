@@ -100,6 +100,10 @@ typedef enum {
     AST_ON_ERROR,         /* ON ERROR GOSUB label                    */
     AST_ON_BREAK,         /* ON BREAK GOSUB label                    */
     AST_ERROR,            /* ERROR n                                 */
+    AST_FATAL,            /* FATAL n (like ERROR but blocks RESUME)  */
+    AST_RESUME,           /* RESUME [NEXT]                           */
+    AST_SETTIME,          /* SETTIME time$ [, date$]                 */
+    AST_SWAP,             /* SWAP var1, var2                         */
 
     /* Memoire */
     AST_PEEK,             /* PEEK(addr)                              */
@@ -108,6 +112,9 @@ typedef enum {
     AST_DPOKE,            /* DPOKE addr, val                         */
     AST_LPEEK,            /* LPEEK(addr)                             */
     AST_LPOKE,            /* LPOKE addr, val                         */
+    AST_SPOKE,            /* SPOKE addr, val                         */
+    AST_SDPOKE,           /* SDPOKE addr, val                        */
+    AST_SLPOKE,           /* SLPOKE addr, val                        */
 
     /* Debug */
     AST_TRON,             /* TRON                                    */

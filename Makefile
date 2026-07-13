@@ -14,6 +14,7 @@ TESTDIR   = tests
 
 # Tous les .c et leurs objets
 SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/math_builtin.c \
+       src/builtins/bit_ops.c \
        src/io/files.c src/events/events.c src/sound/sound.c src/tos/tos.c \
        src/runtime/runtime.c src/memory/memory.c \
        src/lexer/keywords.c src/lexer/lexer.c \

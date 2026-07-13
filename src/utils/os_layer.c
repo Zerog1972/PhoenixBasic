@@ -131,6 +131,15 @@ static char g_date_buffer[16];
 static char g_time_buffer[16];
 static char g_env_buffer[256];
 
+/* Virtual clock - stores SETTIME values so DATE$ / TIME$ return them */
+static int g_virtual_clock_active = 0;
+static int g_virtual_hour   = 0;
+static int g_virtual_min    = 0;
+static int g_virtual_sec    = 0;
+static int g_virtual_day    = 1;
+static int g_virtual_month  = 1;
+static int g_virtual_year   = 1980;
+
 /* Table des descripteurs de fichiers ouverts (canaux 0-99) */
 #define OS_MAX_CHANNELS 100
 typedef struct {
@@ -1279,6 +1288,17 @@ const char* os_time_get_date(int us_format)
     time_t now;
     struct tm *lt;
 
+    if (g_virtual_clock_active) {
+        if (us_format) {
+            sprintf(g_date_buffer, "%02d/%02d/%04d",
+                    g_virtual_month, g_virtual_day, g_virtual_year);
+        } else {
+            sprintf(g_date_buffer, "%02d.%02d.%04d",
+                    g_virtual_day, g_virtual_month, g_virtual_year);
+        }
+        return g_date_buffer;
+    }
+
     now = time(NULL);
     lt = localtime(&now);
 
@@ -1306,6 +1326,12 @@ const char* os_time_get_time(void)
 {
     time_t now;
     struct tm *lt;
+
+    if (g_virtual_clock_active) {
+        sprintf(g_time_buffer, "%02d:%02d:%02d",
+                g_virtual_hour, g_virtual_min, g_virtual_sec);
+        return g_time_buffer;
+    }
 
     now = time(NULL);
     lt = localtime(&now);
@@ -1336,9 +1362,10 @@ int os_time_set_date(const char *date_str)
         /* La modification de la date système nécessite des
            privilèges root sur POSIX. On stocke simplement la
            valeur ; le module GEMDOS/TOS pourra l'utiliser. */
-        (void)day;
-        (void)month;
-        (void)year;
+        g_virtual_clock_active = 1;
+        g_virtual_day   = day;
+        g_virtual_month = month;
+        g_virtual_year  = year;
         g_last_error = OS_ERR_NONE;
         return 0;
     }
@@ -1357,9 +1384,10 @@ int os_time_set_time(const char *time_str)
     }
 
     if (sscanf(time_str, "%d:%d:%d", &hour, &min, &sec) == 3) {
-        (void)hour;
-        (void)min;
-        (void)sec;
+        g_virtual_clock_active = 1;
+        g_virtual_hour = hour;
+        g_virtual_min  = min;
+        g_virtual_sec  = sec;
         g_last_error = OS_ERR_NONE;
         return 0;
     }

@@ -39,6 +39,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"ARRPTR",        TOK_ARRPTR},
     {"ASC",           TOK_ASC},
     {"ASIN",          TOK_ASIN},
+    {"AT",            TOK_PRINT_AT},
     {"ATAN",          TOK_ATN},
     {"ATEXT",         TOK_ATEXT},
     {"ATN",           TOK_ATN},

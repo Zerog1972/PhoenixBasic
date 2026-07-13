@@ -613,6 +613,42 @@ static ast_node *parse_statement(gfa_parser *parser)
                 ast_add_child(node, parse_expression(parser));
                 return node;
             }
+        case TOK_SPOKE:
+            {
+                ast_node *node;
+                node = ast_create(AST_SPOKE);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));
+                return node;
+            }
+        case TOK_SDPOKE:
+            {
+                ast_node *node;
+                node = ast_create(AST_SDPOKE);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));
+                return node;
+            }
+        case TOK_SLPOKE:
+            {
+                ast_node *node;
+                node = ast_create(AST_SLPOKE);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_expression(parser));
+                return node;
+            }
 
         /* Fenetres */
         case TOK_DEFFILL:
@@ -900,6 +936,51 @@ static ast_node *parse_statement(gfa_parser *parser)
                 return node;
             }
         case TOK_SWAP:
+            {
+                ast_node *node;
+                node = ast_create(AST_SWAP);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_primary(parser));  /* var1 */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                ast_add_child(node, parse_primary(parser));  /* var2 */
+                return node;
+            }
+        case TOK_FATAL:
+            {
+                ast_node *node;
+                node = ast_create(AST_FATAL);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));  /* error code */
+                return node;
+            }
+        case TOK_RESUME:
+            {
+                ast_node *node;
+                node = ast_create(AST_RESUME);
+                gfa_lexer_next(parser->lexer);
+                /* Optional NEXT */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_NEXT) {
+                    ast_node *flag;
+                    flag = ast_create_int(AST_ASSIGN, 1);  /* flag = NEXT */
+                    ast_add_child(node, flag);
+                    gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
+        case TOK_SETTIME:
+            {
+                ast_node *node;
+                node = ast_create(AST_SETTIME);
+                gfa_lexer_next(parser->lexer);
+                ast_add_child(node, parse_expression(parser));  /* time$ */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                    ast_add_child(node, parse_expression(parser));  /* date$ */
+                }
+                return node;
+            }
         case TOK_BMOVE:
         case TOK_MSHRINK:
             gfa_lexer_next(parser->lexer);

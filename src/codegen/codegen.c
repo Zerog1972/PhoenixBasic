@@ -8,6 +8,7 @@
  */
 
 #include "codegen.h"
+#include "token.h"
 #include "files.h"
 #include <stdlib.h>
 #include <string.h>
@@ -170,10 +171,15 @@ int gfa_codegen_compile(gfa_symbol_table *symbol_table,
 
     cg_program(&ctx, ast);
     /* Label resolution pass */
+    fprintf(stderr, "DEBUG codegen: label_count=%d\n", label_count);
     if (labels != NULL && label_count > 0) {
         /* Register label positions */
+        for (i = 0; i < label_count; i++) {
+            fprintf(stderr, "DEBUG codegen: label[%d]='%s'\n", i, labels[i].name ? labels[i].name : "(null)");
+        }
         for (i = 0; i < ctx.bc->length; i++) {
             gfa_instruction *inst = &ctx.bc->code[i];
+            fprintf(stderr, "DEBUG codegen: inst[%d] op=%d\n", i, (int)inst->opcode);
             if (inst->opcode == OP_LABEL) {
                 const char *lbl_name;
                 int str_idx, j;
@@ -195,16 +201,21 @@ int gfa_codegen_compile(gfa_symbol_table *symbol_table,
             if ((inst->opcode == OP_JMP ||
                  inst->opcode == OP_JMP_IF_FALSE ||
                  inst->opcode == OP_JMP_IF_TRUE ||
-                 inst->opcode == OP_CALL) &&
+                 inst->opcode == OP_CALL ||
+                 inst->opcode == OP_ON_ERROR) &&
                 inst->operand.int_val == -1 && inst->has_operand2) {
                 const char *target_name;
                 int str_idx, j;
                 str_idx = inst->operand2.int_val2;
+                fprintf(stderr, "DEBUG codegen: patching op=%d str_idx=%d target='%s'\n",
+                        (int)inst->opcode, str_idx,
+                        (str_idx >= 0 && str_idx < ctx.bc->str_count) ? ctx.bc->strings[str_idx] : "?");
                 if (str_idx >= 0 && str_idx < ctx.bc->str_count) {
                     target_name = ctx.bc->strings[str_idx];
                     for (j = 0; j < label_count; j++) {
                         if (labels[j].name && target_name && strieq(labels[j].name, target_name)) {
                             inst->operand.int_val = (os_int32)labels[j].bytecode_ip;
+                            fprintf(stderr, "DEBUG codegen: patched to ip=%d\n", labels[j].bytecode_ip);
                             break;
                         }
                     }
@@ -295,6 +306,44 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_ERROR:
         if (node->left) cg_expression(ctx, node->left);
         cg_emit(ctx, OP_ERROR);
+        break;
+    case AST_FATAL:
+        /* FATAL n : push error code, then OP_FATAL (sets fatal flag and raises error) */
+        if (node->left) cg_expression(ctx, node->left);
+        cg_emit(ctx, OP_FATAL);
+        break;
+    case AST_RESUME:
+        /* RESUME [NEXT] : operand 0 = normal, 1 = NEXT */
+        cg_emit_int(ctx, OP_RESUME, (node->left != NULL) ? 1 : 0);
+        break;
+    case AST_SETTIME:
+        /* SETTIME time$ [, date$] */
+        if (node->left) {
+            cg_expression(ctx, node->left);
+            if (node->left->right) cg_expression(ctx, node->left->right);
+        }
+        cg_emit_int(ctx, OP_CALL_BUILTIN, (os_int32)TOK_SETTIME);
+        break;
+    case AST_SWAP:
+        /* SWAP var1, var2 : push both, swap, pop_store back */
+        if (node->left && node->left->right) {
+            gfa_variable *v1 = NULL;
+            gfa_variable *v2 = NULL;
+            if (node->left->has_ident && node->left->value.ident)
+                v1 = cg_resolve_var(ctx, node->left->value.ident);
+            if (node->left->right->has_ident && node->left->right->value.ident)
+                v2 = cg_resolve_var(ctx, node->left->right->value.ident);
+            if (v1 && v2) {
+                /* Push var1, var2, swap, then pop_store in reverse:
+                 * Stack: [var1_val, var2_val] -> swap -> [var2_val, var1_val]
+                 * Pop top (var1_val) into var2, pop next (var2_val) into var1 */
+                cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)v1);
+                cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)v2);
+                cg_emit(ctx, OP_SWAP);
+                cg_emit_ptr(ctx, OP_POP_STORE, (void *)v2);
+                cg_emit_ptr(ctx, OP_POP_STORE, (void *)v1);
+            }
+        }
         break;
     case AST_ON_GOTO_GOSUB:
         {
@@ -588,12 +637,26 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
         if (node->left) { cg_expression(ctx, node->left);
             if (node->left->right) { cg_expression(ctx, node->left->right); cg_emit(ctx, OP_LPOKE); } }
         break;
+    case AST_SPOKE:
+        if (node->left) { cg_expression(ctx, node->left);
+            if (node->left->right) { cg_expression(ctx, node->left->right); cg_emit(ctx, OP_SPOKE); } }
+        break;
+    case AST_SDPOKE:
+        if (node->left) { cg_expression(ctx, node->left);
+            if (node->left->right) { cg_expression(ctx, node->left->right); cg_emit(ctx, OP_SDPOKE); } }
+        break;
+    case AST_SLPOKE:
+        if (node->left) { cg_expression(ctx, node->left);
+            if (node->left->right) { cg_expression(ctx, node->left->right); cg_emit(ctx, OP_SLPOKE); } }
+        break;
 
     /* --- ON ERROR / EVERY / AFTER (C15, C16) --- */
     case AST_ON_ERROR:
         if (node->left && node->left->has_ident && node->left->value.ident) {
             int str_idx = gfa_bytecode_add_string(ctx->bc, node->left->value.ident);
-            cg_emit_int(ctx, OP_ON_ERROR, (os_int32)str_idx);
+            int instr_idx = cg_emit_int(ctx, OP_ON_ERROR, -1);
+            ctx->bc->code[instr_idx].has_operand2 = 1;
+            ctx->bc->code[instr_idx].operand2.int_val2 = str_idx;
         }
         break;
     case AST_EVERY:
@@ -616,6 +679,34 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_DEFMOUSE: case AST_DEFMARK:
         break; /* no-op: state is stored elsewhere */
 
+    case AST_PRINT_AT:
+        if (node->left) {
+            ast_node *x, *y, *exp;
+            x = node->left;
+            y = x->right;
+            exp = (y != NULL) ? y->right : NULL;
+            if (x != NULL && y != NULL && exp != NULL) {
+                cg_expression(ctx, x);
+                cg_expression(ctx, y);
+                cg_expression(ctx, exp);
+                cg_emit(ctx, OP_PRINT_AT);
+            }
+        }
+        break;
+
+    case AST_PRINT_USING:
+        if (node->left) {
+            ast_node *fmt, *exp;
+            fmt = node->left;
+            exp = fmt->right;
+            if (fmt != NULL && exp != NULL) {
+                cg_expression(ctx, fmt);
+                cg_expression(ctx, exp);
+                cg_emit(ctx, OP_PRINT_USING);
+            }
+        }
+        break;
+
     /* --- Not yet implemented / no bytecode needed --- */
     case AST_VOID: case AST_TILDE: case AST_LET:
     case AST_CALL:         cg_call(ctx, node); break;
@@ -626,7 +717,7 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_ON_BREAK:
     case AST_DEFBIT: case AST_DEFBYT: case AST_DEFWRD:
     case AST_DEFNUM: case AST_DEFFLT: case AST_DEFSTR: case AST_DEFDBL:
-    case AST_PRINT_AT: case AST_PRINT_USING: case AST_VTAB:
+    case AST_VTAB:
         break;
 
     default: break;
@@ -662,6 +753,7 @@ static void cg_expression(codegen_ctx *ctx, ast_node *node)
                 case TOK_GT:  bc_op=OP_GT;  break;
                 case TOK_LE:  bc_op=OP_LE;  break;
                 case TOK_GE:  bc_op=OP_GE;  break;
+                case TOK_APPROX_EQ:bc_op=OP_APPROX_EQ;break;
                 case TOK_AND_OP:bc_op=OP_AND;break;
                 case TOK_OR_OP:bc_op=OP_OR; break;
                 case TOK_XOR_OP:bc_op=OP_XOR;break;
@@ -816,6 +908,9 @@ static void cg_select(codegen_ctx *ctx, ast_node *node)
             int jmp_next;
             cg_expression(ctx, node->cond);
             cg_expression(ctx, case_node->cond);
+            /* SELECT/CASE uses OP_EQ (strict equality) to match
+               GFA Basic 3.5 semantics; approximate == is only for
+               IF/WHILE/UNTIL comparisons */
             cg_emit(ctx, OP_EQ);
             jmp_next = cg_emit_int(ctx, OP_JMP_IF_FALSE, 0);
             cg_statement(ctx, case_node->body);

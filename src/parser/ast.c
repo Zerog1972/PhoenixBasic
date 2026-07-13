@@ -32,6 +32,7 @@ static const char *g_ast_names[] = {
     "COLOR", "LINE", "CIRCLE", "BOX", "PBOX", "PCIRCLE",
     "SOUND", "BEEP",
     "EVERY", "AFTER", "ON_ERROR", "ON_BREAK", "ERROR",
+    "FATAL", "RESUME", "SETTIME", "SWAP",
     "PEEK", "POKE", "DPEEK", "DPOKE", "LPEEK", "LPOKE",
     "TRON", "TROFF", "REM",
     "CALL", "VOID", "TILDE",
