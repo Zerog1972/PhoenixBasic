@@ -1,5 +1,9 @@
 # Makefile - GFA Basic 3.5 Emulator (C89)
 # ========================================
+# Le code est C89 strict et portable :
+#   - hote de developpement : gcc --ansi -pedantic-errors (Windows/Unix)
+#   - Atari ST : compilateur Pure C 1.1 (voir cible "atari" et GFABASIC.PRJ)
+#
 CC       = gcc
 CFLAGS   = -ansi -pedantic-errors -Wall -Wextra -O2
 

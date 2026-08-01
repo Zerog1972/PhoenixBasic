@@ -4,13 +4,14 @@
  * Fournit toutes les primitives systeme necessaires a l'emulateur
  * GFA Basic 3.5. Implementation portable en C89 strict.
  *
- * Plateforme supportee :
- *   - Windows (MinGW/Cygwin)
+ * Plateformes supportees :
+ *   - Windows (MinGW/Cygwin)   : branche _WIN32
+ *   - Atari ST (Pure C 1.1)    : branche !_WIN32 (GEMDOS/TOS)
  *
  * Conventions :
  *   - C89 strict (pas de //, pas d'inline, pas de bool, declarations
  *     en tete de bloc)
- *   - Pas de compilation conditionnelle
+ *   - Branches systeme isolees par #ifdef _WIN32 / #else
  *
  * Reference : cahier-des-charges-gfabasic.md, sections 2.2, 7, 9, 15.2
  */
@@ -23,6 +24,7 @@
 #include <time.h>
 #include <ctype.h>
 
+#ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
 #include <io.h>
@@ -31,32 +33,75 @@
 /* ------------------------------------------------------------------ */
 /* Macros plateforme Windows                                          */
 /* ------------------------------------------------------------------ */
-#define OS_MKDIR(path)  _mkdir(path)
-#define OS_RMDIR(path)  _rmdir(path)
-#define OS_CHDIR(path)  _chdir(path)
-#define OS_GETCWD(buf,s) _getcwd(buf,s)
-#define OS_UNLINK(path) _unlink(path)
-#define OS_RENAME(o,n)  rename(o,n)
-#define OS_SLEEP_MS(ms) Sleep(ms)
+#define OS_MKDIR(path)    _mkdir(path)
+#define OS_RMDIR(path)    _rmdir(path)
+#define OS_CHDIR(path)    _chdir(path)
+#define OS_GETCWD(buf,s)  _getcwd(buf,s)
+#define OS_UNLINK(path)   _unlink(path)
+#define OS_RENAME(o,n)    rename(o,n)
+#define OS_SLEEP_MS(ms)   Sleep(ms)
+#else
+/* ------------------------------------------------------------------ */
+/* Atari ST (Pure C 1.1) : GEMDOS / BIOS / XBIOS                      */
+/* ------------------------------------------------------------------ */
+#include <tos.h>
+
+#define OS_MKDIR(path)    Dcreate(path)
+#define OS_RMDIR(path)    Ddelete(path)
+#define OS_CHDIR(path)    Dsetpath(path)
+#define OS_GETCWD(buf,s)  Dgetpath(buf, 0)
+#define OS_UNLINK(path)   Ddelete(path)
+#define OS_RENAME(o,n)    Frename(0, n, o)
+#define OS_SLEEP_MS(ms)   os_tos_delay(ms)
+
+/*
+ * os_tos_get_hz200 — Lit le compteur 200 Hz du TOS (adresse $4BA).
+ * Equivalent LPEEK(&H4BA) de GFA Basic.
+ */
+static os_int32 os_tos_get_hz200(void)
+{
+    unsigned long *p;
+    p = (unsigned long *)(size_t)0x4BAUL;
+    return (os_int32)*p;
+}
+
+/*
+ * os_tos_delay — Attend delay_ms millisecondes (boucle sur 200 Hz).
+ */
+static void os_tos_delay(unsigned long delay_ms)
+{
+    unsigned long start;
+    unsigned long elapsed;
+    unsigned long now;
+
+    start = (unsigned long)os_tos_get_hz200();
+    elapsed = (delay_ms * 200UL) / 1000UL;
+
+    for (;;) {
+        now = (unsigned long)os_tos_get_hz200();
+        if ((now - start) >= elapsed) break;
+    }
+}
+#endif
 
 /* ------------------------------------------------------------------ */
-/* Constantes spécifiques Atari ST                                    */
+/* Constantes specifiques Atari ST                                    */
 /* ------------------------------------------------------------------ */
 
-/* Moment de démarrage du programme (pour émuler TIMER) */
+/* Moment de demarrage du programme (pour emuler TIMER) */
 static os_int32 g_startup_ticks_ms = 0;
 
 /* Palette Atari ST standard (16 couleurs, format 0x00RRGGBB) */
 const unsigned long os_st_palette[16] = {
     0x00000000UL,  /*  0: Noir           */
-    0x00000080UL,  /*  1: Bleu foncé     */
-    0x00008000UL,  /*  2: Vert foncé     */
-    0x00008080UL,  /*  3: Cyan foncé     */
-    0x00800000UL,  /*  4: Rouge foncé    */
-    0x00800080UL,  /*  5: Magenta foncé  */
+    0x00000080UL,  /*  1: Bleu fonce     */
+    0x00008000UL,  /*  2: Vert fonce     */
+    0x00008080UL,  /*  3: Cyan fonce     */
+    0x00800000UL,  /*  4: Rouge fonce    */
+    0x00800080UL,  /*  5: Magenta fonce  */
     0x00808000UL,  /*  6: Marron         */
     0x00C0C0C0UL,  /*  7: Gris clair     */
-    0x00808080UL,  /*  8: Gris foncé     */
+    0x00808080UL,  /*  8: Gris fonce     */
     0x000000FFUL,  /*  9: Bleu clair     */
     0x0000FF00UL,  /* 10: Vert clair     */
     0x0000FFFFUL,  /* 11: Cyan clair     */
@@ -67,22 +112,22 @@ const unsigned long os_st_palette[16] = {
 };
 
 /* ------------------------------------------------------------------ */
-/* État global du module                                              */
+/* Etat global du module                                              */
 /* ------------------------------------------------------------------ */
 
 /* Erreur courante */
 static os_error_code g_last_error = OS_ERR_NONE;
 
-/* Driver d'affichage enregistré */
+/* Driver d'affichage enregistre */
 static const os_display_driver *g_display_driver = NULL;
 
-/* Résolution d'affichage courante */
+/* Resolution d'affichage courante */
 static int g_display_resolution = -1;
 
-/* Écho console */
+/* Echo console */
 static int g_con_echo = 1;
 
-/* Buffer pour les chaînes date/heure retournées */
+/* Buffer pour les chaines date/heure retournees */
 static char g_date_buffer[16];
 static char g_time_buffer[16];
 static char g_env_buffer[256];
@@ -101,7 +146,7 @@ static int g_virtual_year   = 1980;
 typedef struct {
     FILE           *stdio_handle;  /* handle C standard            */
     os_file_handle  os_handle;     /* pointeur vers cette structure */
-    int             channel;       /* numéro de canal (0-99)        */
+    int             channel;       /* numero de canal (0-99)        */
     char            gfa_mode;      /* mode GFA : 'I','O','A','R','U' */
     char            filename[256]; /* nom du fichier                */
     int             in_use;        /* drapeau d'utilisation          */
@@ -109,7 +154,7 @@ typedef struct {
 
 static os_channel_entry g_channels[OS_MAX_CHANNELS];
 
-/* Buffer pour os_dir_first/next (émulation FSFIRST/FSNEXT) */
+/* Buffer pour os_dir_first/next (emulation FSFIRST/FSNEXT) */
 static char            g_dir_pattern[256];
 static int             g_dir_attr_mask;
 
@@ -119,11 +164,26 @@ static int             g_dir_attr_mask;
 
 /*
  * get_ms_now — Retourne le temps courant en millisecondes.
- * Utilise GetTickCount (Windows).
  */
 static os_int32 get_ms_now(void)
 {
+#ifdef _WIN32
     return (os_int32)GetTickCount();
+#else
+    unsigned long hz200;
+    unsigned long secs;
+    unsigned long frac;
+
+    /* Conversion du compteur 200 Hz TOS en millisecondes */
+    hz200 = (unsigned long)os_tos_get_hz200();
+    secs  = hz200 / 200UL;
+    frac  = hz200 % 200UL;
+    {
+        os_int32 ms;
+        ms = (os_int32)(secs * 1000UL + (frac * 1000UL) / 200UL);
+        return ms;
+    }
+#endif
 }
 
 /*
@@ -159,7 +219,7 @@ static void channels_close_all(void)
 
 /*
  * gfa_mode_to_c_mode — Convertit un mode GFA ('I','O','A','R','U')
- * en chaîne de mode fopen().
+ * en chaine de mode fopen().
  */
 static const char* gfa_mode_to_c_mode(char gfa_mode)
 {
@@ -174,7 +234,7 @@ static const char* gfa_mode_to_c_mode(char gfa_mode)
 }
 
 /*
- * gfa_mode_valid — Vérifie si le mode d'ouverture est valide.
+ * gfa_mode_valid — Verifie si le mode d'ouverture est valide.
  */
 static int gfa_mode_valid(char mode)
 {
@@ -184,7 +244,7 @@ static int gfa_mode_valid(char mode)
 }
 
 /* ------------------------------------------------------------------ */
-/* Initialisation / Arrêt                                             */
+/* Initialisation / Arret                                             */
 /* ------------------------------------------------------------------ */
 
 int os_init(void)
@@ -206,7 +266,7 @@ int os_init(void)
 
 void os_shutdown(void)
 {
-    /* Arrêter l'affichage si actif */
+    /* Arreter l'affichage si actif */
     if (g_display_driver != NULL && g_display_driver->shutdown != NULL) {
         g_display_driver->shutdown();
     }
@@ -314,7 +374,7 @@ os_file_handle os_file_open(const char *name, char gfa_mode, int channel)
     FILE *fp;
     os_channel_entry *entry;
 
-    /* Valider les paramètres */
+    /* Valider les parametres */
     if (name == NULL || !gfa_mode_valid(gfa_mode)) {
         g_last_error = OS_ERR_INVALID_HANDLE;
         return NULL;
@@ -325,7 +385,7 @@ os_file_handle os_file_open(const char *name, char gfa_mode, int channel)
         return NULL;
     }
 
-    /* Vérifier si le canal est déjà ouvert */
+    /* Verifier si le canal est deja ouvert */
     if (g_channels[channel].in_use) {
         g_last_error = OS_ERR_ACCESS_DENIED;
         return NULL;
@@ -350,7 +410,7 @@ os_file_handle os_file_open(const char *name, char gfa_mode, int channel)
     entry->gfa_mode     = gfa_mode;
     entry->in_use       = 1;
 
-    /* Copier le nom du fichier (sécurisé) */
+    /* Copier le nom du fichier (securise) */
     strncpy(entry->filename, name, sizeof(entry->filename) - 1);
     entry->filename[sizeof(entry->filename) - 1] = '\0';
 
@@ -638,7 +698,7 @@ int os_file_flush(os_file_handle handle)
 }
 
 /* ------------------------------------------------------------------ */
-/* Opérations sur le système de fichiers                              */
+/* Operations sur le systeme de fichiers                              */
 /* ------------------------------------------------------------------ */
 
 int os_fs_exist(const char *name)
@@ -648,6 +708,7 @@ int os_fs_exist(const char *name)
         return OS_FALSE;
     }
 
+#ifdef _WIN32
     if (_access(name, 0) == 0) {
         g_last_error = OS_ERR_NONE;
         return OS_TRUE;
@@ -655,6 +716,33 @@ int os_fs_exist(const char *name)
 
     g_last_error = OS_ERR_FILE_NOT_FOUND;
     return OS_FALSE;
+#else
+    {
+        int result;
+        char pattern[256];
+        size_t len;
+
+        len = strlen(name);
+        if (len < sizeof(pattern) - 2) {
+            strcpy(pattern, name);
+            pattern[len++] = '\\';
+            pattern[len++] = '*';
+            pattern[len] = '\0';
+        } else {
+            strncpy(pattern, name, sizeof(pattern) - 1);
+            pattern[sizeof(pattern) - 1] = '\0';
+        }
+
+        result = Fsfirst(pattern, 0);
+        if (result == 0) {
+            g_last_error = OS_ERR_NONE;
+            return OS_TRUE;
+        }
+
+        g_last_error = OS_ERR_FILE_NOT_FOUND;
+        return OS_FALSE;
+    }
+#endif
 }
 
 int os_fs_delete(const char *name)
@@ -691,33 +779,45 @@ int os_fs_rename(const char *old_name, const char *new_name)
 
 os_int32 os_fs_free(int drive)
 {
-    (void)drive;  /* Simplifié : retourne une estimation */
-
-    /*
-     * Sur un vrai Atari ST, DFREE lit la table d'allocation FAT.
-     * Ici on retourne une estimation basée sur la mémoire disponible
-     * du système hôte. Les couches supérieures (GEMDOS) peuvent
-     * spécialiser ce comportement.
-     */
+#ifdef _WIN32
+    (void)drive;  /* Simplifie : retourne une estimation */
 
     g_last_error = OS_ERR_NONE;
-    /*
-     * Retourne une valeur arbitraire élevée pour simuler un disque
-     * raisonnablement rempli (environ 10 Mo libres).
-     * Les implémentations réelles de GEMDOS feront un DFREE précis.
-     */
     return (os_int32)(10L * 1024L * 1024L);
+#else
+    /*
+     * GEMDOS Dfree : interroge la table d'allocation du disque.
+     * info[0] = secteurs totaux, info[1] = secteurs libres,
+     * info[2] = octets/secteur, info[3] = secteurs/cluster.
+     * drive : 0 = courant, 1 = A:, 2 = B:, ...
+     */
+    {
+        long info[4];
+        Dfree(info, drive);
+        g_last_error = OS_ERR_NONE;
+        return (os_int32)(info[1] * info[2]);
+    }
+#endif
 }
 
 os_int32 os_fs_total(int drive)
 {
+#ifdef _WIN32
     (void)drive;
     g_last_error = OS_ERR_NONE;
     return (os_int32)(100L * 1024L * 1024L);
+#else
+    {
+        long info[4];
+        Dfree(info, drive);
+        g_last_error = OS_ERR_NONE;
+        return (os_int32)(info[0] * info[2]);
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
-/* Répertoires                                                        */
+/* Repertoires                                                        */
 /* ------------------------------------------------------------------ */
 
 int os_dir_mkdir(const char *name)
@@ -810,6 +910,7 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         return OS_ERR_FILE_NOT_FOUND;
     }
 
+#ifdef _WIN32
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
@@ -821,21 +922,18 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         }
 
         /* Stocker le handle pour les appels suivants */
-        /* Approche simplifiée : utilisation d'une statique */
-        /* Note : une implémentation complète nécessiterait de gérer
-           plusieurs recherches simultanées. */
+        /* Approche simplifiee : utilisation d'une statique */
 
         strncpy(g_dir_pattern, pattern, sizeof(g_dir_pattern) - 1);
         g_dir_pattern[sizeof(g_dir_pattern) - 1] = '\0';
         g_dir_attr_mask = attr;
 
-        /* Remplir les infos */
         strncpy(info->name, find_data.cFileName, 13);
         info->name[13] = '\0';
         info->attr = (os_byte)find_data.dwFileAttributes;
         info->size = (os_int32)find_data.nFileSizeLow;
 
-        /* Format GEMDOS packé pour la date/heure (simplifié) */
+        /* Format GEMDOS packe pour la date/heure (simplifie) */
         {
             SYSTEMTIME st;
             FileTimeToSystemTime(&find_data.ftLastWriteTime, &st);
@@ -852,6 +950,37 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         g_last_error = OS_ERR_NONE;
         return 0;
     }
+#else
+    /*
+     * GEMDOS Fsfirst/Fsnext : la DTA globale contient le resultat
+     * (attributs, date/heure packees, taille, nom 8.3).
+     */
+    {
+        int result;
+        DTA *dta;
+
+        strncpy(g_dir_pattern, pattern, sizeof(g_dir_pattern) - 1);
+        g_dir_pattern[sizeof(g_dir_pattern) - 1] = '\0';
+        g_dir_attr_mask = attr;
+
+        result = Fsfirst(pattern, attr);
+        if (result < 0) {
+            g_last_error = OS_ERR_NO_MORE_FILES;
+            return OS_ERR_NO_MORE_FILES;
+        }
+
+        dta = Fgetdta();
+        strncpy(info->name, dta->dta_name, 13);
+        info->name[13] = '\0';
+        info->attr = (os_byte)dta->dta_attr;
+        info->size = (os_int32)dta->dta_size;
+        info->time = dta->dta_time;
+        info->date = dta->dta_date;
+
+        g_last_error = OS_ERR_NONE;
+        return 0;
+    }
+#endif
 }
 
 int os_dir_next(os_file_info *info)
@@ -861,6 +990,7 @@ int os_dir_next(os_file_info *info)
         return OS_ERR_NO_MORE_FILES;
     }
 
+#ifdef _WIN32
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
@@ -872,8 +1002,7 @@ int os_dir_next(os_file_info *info)
             return OS_ERR_NO_MORE_FILES;
         }
 
-        /* Il faudrait en réalité maintenir un index, mais l'approche
-           simplifiée retourne toujours le même fichier. */
+        /* Approche simplifiee : retourne toujours le meme fichier. */
         strncpy(info->name, find_data.cFileName, 13);
         info->name[13] = '\0';
         info->attr = (os_byte)find_data.dwFileAttributes;
@@ -892,6 +1021,29 @@ int os_dir_next(os_file_info *info)
         g_last_error = OS_ERR_NONE;
         return 0;
     }
+#else
+    {
+        int result;
+        DTA *dta;
+
+        result = Fsnext();
+        if (result < 0) {
+            g_last_error = OS_ERR_NO_MORE_FILES;
+            return OS_ERR_NO_MORE_FILES;
+        }
+
+        dta = Fgetdta();
+        strncpy(info->name, dta->dta_name, 13);
+        info->name[13] = '\0';
+        info->attr = (os_byte)dta->dta_attr;
+        info->size = (os_int32)dta->dta_size;
+        info->time = dta->dta_time;
+        info->date = dta->dta_date;
+
+        g_last_error = OS_ERR_NONE;
+        return 0;
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -900,22 +1052,40 @@ int os_dir_next(os_file_info *info)
 
 int os_con_input_char(void)
 {
-    int c;
-    c = getchar();
-    if (c == EOF) {
-        g_last_error = OS_ERR_READ_FAULT;
-        return -1;
+#ifdef _WIN32
+    {
+        int c;
+        c = getchar();
+        if (c == EOF) {
+            g_last_error = OS_ERR_READ_FAULT;
+            return -1;
+        }
+        g_last_error = OS_ERR_NONE;
+        return c;
     }
-    g_last_error = OS_ERR_NONE;
-    return c;
+#else
+    {
+        int c;
+        c = Cconin() & 0xFF;
+        g_last_error = OS_ERR_NONE;
+        return c;
+    }
+#endif
 }
 
 int os_con_input_key(void)
 {
+#ifdef _WIN32
     if (_kbhit()) {
         return _getch();
     }
     return -1;
+#else
+    if (Cconis()) {
+        return Cconin() & 0xFF;
+    }
+    return -1;
+#endif
 }
 
 void os_con_output_char(int c)
@@ -935,17 +1105,17 @@ void os_con_output_string(const char *s)
 void os_con_cursor_goto(int col, int line)
 {
     /*
-     * Séquence d'échappement VT-52 pour positionnement curseur.
+     * Sequence d'echappement VT-52 pour positionnement curseur.
      * Format : ESC Y l c  (ligne, colonne en ASCII + 32)
      *
-     * Également supportée : séquence ANSI CSI pour les terminaux
+     * Egalement supportee : sequence ANSI CSI pour les terminaux
      * modernes.
      */
     if (col < 1) col = 1;
     if (line < 1) line = 1;
 
     /*
-     * On émet les deux séquences : d'abord ANSI (moderne),
+     * On emet les deux sequences : d'abord ANSI (moderne),
      * puis VT-52 (fallback).
      */
     /* ANSI : ESC [ line ; col H */
@@ -962,8 +1132,8 @@ void os_con_cursor_goto(int col, int line)
 int os_con_cursor_get_x(void)
 {
     /*
-     * POSITION DU CURSEUR : Nécessite l'interrogation du terminal
-     * via DSR (Device Status Report). Retourne 1 par défaut.
+     * POSITION DU CURSEUR : Necessite l'interrogation du terminal
+     * via DSR (Device Status Report). Retourne 1 par defaut.
      * Le module console (console.c) pourra maintenir cette position
      * via un suivi logiciel.
      */
@@ -978,14 +1148,14 @@ int os_con_cursor_get_y(void)
 void os_con_clear(void)
 {
     /*
-     * CLS en GFA Basic émet ESC E puis CR (VT-52).
-     * On émet aussi la séquence ANSI pour compatibilité.
+     * CLS en GFA Basic emet ESC E puis CR (VT-52).
+     * On emet aussi la sequence ANSI pour compatibilite.
      */
     /* ANSI : ESC [ 2 J */
     fprintf(stdout, "\033[2J");
     /* VT-52 : ESC E */
     fprintf(stdout, "\033E");
-    /* Retour en haut à gauche */
+    /* Retour en haut a gauche */
     fprintf(stdout, "\r");
     fflush(stdout);
 }
@@ -1000,7 +1170,7 @@ void os_con_clear_to_eol(void)
 void os_con_set_echo(int on)
 {
     g_con_echo = on ? 1 : 0;
-    /* L'implémentation réelle nécessite SetConsoleMode (Windows).
+    /* L'implementation reelle necessite SetConsoleMode (Windows).
        Pour le moment, simple flag. */
 }
 
@@ -1024,7 +1194,7 @@ os_int32 os_time_ticks(void)
     os_int32 ticks;
 
     delta_ms = get_ms_now() - g_startup_ticks_ms;
-    /* Conversion ms → ticks 200 Hz avec arrondi */
+    /* Conversion ms -> ticks 200 Hz avec arrondi */
     ticks = (os_int32)(((os_int32)(delta_ms) * 200L) / 1000L);
 
     return ticks;
@@ -1120,8 +1290,8 @@ int os_time_set_date(const char *date_str)
     /* Essayer les deux formats */
     if (sscanf(date_str, "%d.%d.%d", &day, &month, &year) == 3 ||
         sscanf(date_str, "%d/%d/%d", &month, &day, &year) == 3) {
-        /* La modification de la date système nécessite des
-           privilèges. On stocke simplement la valeur ; le module
+        /* La modification de la date systeme necessite des
+           privileges. On stocke simplement la valeur ; le module
            GEMDOS/TOS pourra l'utiliser. */
         g_virtual_clock_active = 1;
         g_virtual_day   = day;
@@ -1171,44 +1341,74 @@ int os_time_set_datetime(const char *time_str, const char *date_str)
 os_int32 os_time_get_raw_gemdos(void)
 {
     /*
-     * Format GEMDOS packé :
+     * Format GEMDOS packe :
      *   Bits 0-4   : secondes / 2
      *   Bits 5-10  : minutes (0-59)
      *   Bits 11-15 : heures (0-23)
      *   Bits 16-20 : jour (1-31)
      *   Bits 21-24 : mois (1-12)
-     *   Bits 25-31 : année - 1980
+     *   Bits 25-31 : annee - 1980
      */
-    time_t now;
-    struct tm *lt;
-    os_int32 packed;
+#ifdef _WIN32
+    {
+        time_t now;
+        struct tm *lt;
+        os_int32 packed;
 
-    now = time(NULL);
-    lt = localtime(&now);
+        now = time(NULL);
+        lt = localtime(&now);
 
-    if (lt == NULL) return 0;
+        if (lt == NULL) return 0;
 
-    packed  = (lt->tm_sec / 2) & 0x1F;
-    packed |= (lt->tm_min & 0x3F) << 5;
-    packed |= (lt->tm_hour & 0x1F) << 11;
-    packed |= (lt->tm_mday & 0x1F) << 16;
-    packed |= ((lt->tm_mon + 1) & 0x0F) << 21;
-    packed |= ((lt->tm_year + 1900 - 1980) & 0x7F) << 25;
+        packed  = (lt->tm_sec / 2) & 0x1F;
+        packed |= (lt->tm_min & 0x3F) << 5;
+        packed |= (lt->tm_hour & 0x1F) << 11;
+        packed |= (lt->tm_mday & 0x1F) << 16;
+        packed |= ((lt->tm_mon + 1) & 0x0F) << 21;
+        packed |= ((lt->tm_year + 1900 - 1980) & 0x7F) << 25;
 
-    return packed;
+        return packed;
+    }
+#else
+    {
+        os_int32 packed;
+
+        packed  = (os_int32)Tgettime() & 0xFFFF;         /* heure 16 bits */
+        packed |= ((os_int32)Tgetdate() & 0xFFFF) << 16; /* date 16 bits  */
+
+        return packed;
+    }
+#endif
 }
 
 void os_time_set_raw_gemdos(os_int32 packed_time)
 {
     /*
-     * La modification de l'heure système nécessite des privilèges.
-     * On décode simplement la valeur pour le suivi logiciel.
+     * La modification de l'heure systeme necessite des privileges.
+     * On decode simplement la valeur pour le suivi logiciel.
      */
+#ifdef _WIN32
     (void)packed_time;
+#else
+    if (g_virtual_clock_active) {
+        os_int32 date;
+        os_int32 time;
+
+        date = (packed_time >> 16) & 0xFFFF;
+        time = packed_time & 0xFFFF;
+
+        g_virtual_year  = ((date >> 9) & 0x7F) + 1980;
+        g_virtual_month = (date >> 5) & 0x0F;
+        g_virtual_day   = date & 0x1F;
+        g_virtual_hour  = (time >> 11) & 0x1F;
+        g_virtual_min   = (time >> 5) & 0x3F;
+        g_virtual_sec   = (time & 0x1F) * 2;
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
-/* Mémoire                                                            */
+/* Memoire                                                            */
 /* ------------------------------------------------------------------ */
 
 void* os_mem_alloc(size_t size)
@@ -1291,26 +1491,52 @@ char* os_strdup(const char *s)
 os_int32 os_mem_available(os_int32 *total)
 {
     /*
-     * FRE(0) retourne la mémoire libre.
-     * Sur un système moderne, c'est une estimation.
-     * Les couches supérieures pourront affiner via GEMDOS.
+     * FRE(0) retourne la memoire libre.
      */
+#ifdef _WIN32
     if (total != NULL) {
         *total = (os_int32)(256L * 1024L * 1024L);  /* 256 Mo */
     }
 
     g_last_error = OS_ERR_NONE;
     return (os_int32)(128L * 1024L * 1024L);  /* 128 Mo libres */
+#else
+    {
+        long *mem;
+        long total_bytes;
+        long free_bytes;
+
+        mem = Malloc(-1L);
+        total_bytes = (long)mem;
+        mem = Malloc(0L);
+        free_bytes = (long)mem;
+
+        if (total != NULL) {
+            *total = (os_int32)total_bytes;
+        }
+
+        g_last_error = OS_ERR_NONE;
+        return (os_int32)free_bytes;
+    }
+#endif
 }
 
 os_int32 os_mem_largest_block(void)
 {
     /*
      * FRE(1) : taille du plus grand bloc contigu.
-     * Estimation simplifiée.
      */
+#ifdef _WIN32
     g_last_error = OS_ERR_NONE;
     return (os_int32)(64L * 1024L * 1024L);
+#else
+    {
+        long largest;
+        largest = (long)Malloc(-2L);
+        g_last_error = OS_ERR_NONE;
+        return (os_int32)largest;
+    }
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1319,13 +1545,17 @@ os_int32 os_mem_largest_block(void)
 
 void os_sound_beep(void)
 {
-    /* BEEP : émet un bip système */
+    /* BEEP : emet un bip systeme */
+#ifdef _WIN32
     MessageBeep(MB_OK);
+#else
+    Bconout(0, 7);  /* BIOS : caractere BEL (0x07) sur la console */
+#endif
 }
 
 int os_sound_init(void)
 {
-    /* Le sous-système audio sera initialisé dans le module sound.c */
+    /* Le sous-systeme audio sera initialise dans le module sound.c */
     g_last_error = OS_ERR_NONE;
     return 0;
 }
@@ -1338,8 +1568,8 @@ void os_sound_shutdown(void)
 void os_sound_tone(int channel, int freq_hz, int duration_ms, int volume)
 {
     /*
-     * L'implémentation réelle du YM-2149 sera faite dans le module
-     * sound.c. Pour le moment, émet un simple bip console.
+     * L'implementation reelle du YM-2149 sera faite dans le module
+     * sound.c. Pour le moment, emet un simple bip console.
      */
     (void)channel;
     (void)freq_hz;
@@ -1363,7 +1593,7 @@ void os_sound_stop_all(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Divers système                                                     */
+/* Divers systeme                                                     */
 /* ------------------------------------------------------------------ */
 
 const char* os_sys_get_env(const char *name)
@@ -1391,8 +1621,8 @@ int os_sys_get_drive(void)
 {
     /*
      * Sur Atari ST : 0 = courant, 1 = A:, 2 = B: ...
-     * Sur système hôte : retourne 1 pour simuler A:.
      */
+#ifdef _WIN32
     {
         char cwd[256];
         if (_getcwd(cwd, sizeof(cwd)) != NULL && cwd[0] != '\0' && cwd[1] == ':') {
@@ -1400,23 +1630,45 @@ int os_sys_get_drive(void)
         }
     }
     return 1;  /* Simuler lecteur A: */
+#else
+    {
+        char path[256];
+
+        if (Dgetpath(path, 0) >= 0) {
+            if (path[0] >= 'A' && path[0] <= 'Z') {
+                return (path[0] - 'A' + 1);
+            }
+            if (path[0] >= 'a' && path[0] <= 'z') {
+                return (path[0] - 'a' + 1);
+            }
+        }
+        return 1;  /* Lecteur par defaut A: */
+    }
+#endif
 }
 
 int os_sys_set_drive(int drive)
 {
-    char path[4];
     if (drive < 1 || drive > 26) {
         g_last_error = OS_ERR_INVALID_DRIVE;
         return -1;
     }
-    path[0] = (char)('A' + drive - 1);
-    path[1] = ':';
-    path[2] = '\\';
-    path[3] = '\0';
-    if (!SetCurrentDirectory(path)) {
-        g_last_error = OS_ERR_INVALID_DRIVE;
-        return -1;
+
+#ifdef _WIN32
+    {
+        char path[4];
+        path[0] = (char)('A' + drive - 1);
+        path[1] = ':';
+        path[2] = '\\';
+        path[3] = '\0';
+        if (!SetCurrentDirectory(path)) {
+            g_last_error = OS_ERR_INVALID_DRIVE;
+            return -1;
+        }
     }
+#else
+    Dsetdrv(drive - 1);
+#endif
     g_last_error = OS_ERR_NONE;
     return 0;
 }
@@ -1426,13 +1678,15 @@ os_int32 os_sys_get_basepage(void)
     /*
      * BASEPAGE : adresse de la page de base du programme.
      * Sur l'Atari ST, la basepage est une structure de 256 octets
-     * placée au début de l'espace mémoire du processus.
-     *
-     * Retourne une valeur factice pour l'émulation (les adresses
-     * réelles sur le système hôte n'ont pas de sens).
+     * placee au debut de l'espace memoire du processus.
      */
+#ifdef _WIN32
     g_last_error = OS_ERR_NONE;
     return (os_int32)0x10000L;  /* Adresse factice */
+#else
+    g_last_error = OS_ERR_NONE;
+    return (os_int32)(size_t)_BasPag;
+#endif
 }
 
 void os_sys_quit(int exit_code)

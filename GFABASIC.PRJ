@@ -1,0 +1,30 @@
+# GFABASIC.PRJ - Projet Pure C 1.1 (Atari ST / TOS)
+# ==================================================
+# Compilation : ouvrir ce fichier dans Pure C, menu Project / Build.
+# Utilise tos.h (librairies GEMDOS/BIOS/XBIOS) et libc.a de Pure C.
+# Le code est C89 strict : -A (ANSI) est recommande.
+#
+# Options compilateur
+-A -O -D__STDC__
+
+# Modules (ordre : utilitaires -> builtins -> noyau)
+src\utils\os_layer.c
+src\builtins\strings.c
+src\builtins\gfamath.c
+src\builtins\bit_ops.c
+src\io\files.c
+src\events\events.c
+src\sound\sound.c
+src\tos\tos.c
+src\runtime\runtime.c
+src\memory\memory.c
+src\lexer\keywords.c
+src\lexer\lexer.c
+src\parser\ast.c
+src\parser\parser.c
+src\codegen\codegen.c
+src\graphics\gfx.c
+src\main.c
+
+# Editeur de liens : produit GFABASIC.PRG, librairie LIBM? (float)
+-LSLIBM

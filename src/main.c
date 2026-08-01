@@ -14,8 +14,6 @@
 #include <string.h>
 #include <ctype.h>
 
-#include <conio.h>
-
 #include "os_layer.h"
 #include "keywords.h"
 #include "parser.h"
