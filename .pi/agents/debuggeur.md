@@ -81,5 +81,5 @@ result = gfa_val_to_float(&value) * 2;
 
 ### Tests impactés
 - `make test-all` — 267 tests, tous passent
-- Nouveau test à ajouter dans `tests/test_runtime.c`
+- Nouveau test à ajouter dans `tests/test_rt.c`
 ```

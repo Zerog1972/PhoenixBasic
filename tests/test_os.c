@@ -1,10 +1,10 @@
 /*
- * test_os_layer.c — Tests unitaires de la couche d'abstraction OS
- * ================================================================
+ * test_os.c — Tests unitaires de la couche d'abstraction OS
+ * =========================================================
  * Valide l'ensemble des fonctions de os_layer.h.
  * Compilation C89 stricte.
  *
- * Usage : ./test_os_layer
+ * Usage : ./test_os
  */
 
 #include <stdio.h>

@@ -1,5 +1,5 @@
 /*
- * test_lexer.c - Tests du lexer GFA Basic 3.5
+ * test_lex.c - Tests du lexer GFA Basic 3.5
  */
 #include "lexer.h"
 #include "keywords.h"

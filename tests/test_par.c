@@ -1,5 +1,5 @@
 /*
- * test_parser.c - Tests du parser GFA Basic 3.5
+ * test_par.c - Tests du parser GFA Basic 3.5
  */
 #include "parser.h"
 #include <stdio.h>

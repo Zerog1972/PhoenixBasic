@@ -14,7 +14,7 @@ BUILDDIR  = build
 TESTDIR   = tests
 
 # Tous les .c et leurs objets
-SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/math_builtin.c \
+SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/gfamath.c \
        src/builtins/bit_ops.c \
        src/io/files.c src/events/events.c src/sound/sound.c src/tos/tos.c \
        src/runtime/runtime.c src/memory/memory.c \
@@ -57,25 +57,25 @@ $(BUILDDIR)/dirs:
 	@touch $(BUILDDIR)/dirs
 
 # Tests
-test-os: $(OBJS) $(TESTDIR)/test_os_layer.c
-	$(CC) $(CFLAGS) -Isrc/utils -o $(BUILDDIR)/test_os $(TESTDIR)/test_os_layer.c $(BUILDDIR)/utils/os_layer.o -lm
+test-os: $(OBJS) $(TESTDIR)/test_os.c
+	$(CC) $(CFLAGS) -Isrc/utils -o $(BUILDDIR)/test_os $(TESTDIR)/test_os.c $(BUILDDIR)/utils/os_layer.o -lm
 	@$(BUILDDIR)/test_os
 
-test-rt: $(OBJS) $(TESTDIR)/test_runtime.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_runtime $(TESTDIR)/test_runtime.c $(OBJS) -lm
-	@$(BUILDDIR)/test_runtime
+test-rt: $(OBJS) $(TESTDIR)/test_rt.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_rt $(TESTDIR)/test_rt.c $(OBJS) -lm
+	@$(BUILDDIR)/test_rt
 
-test-lexer: $(OBJS) $(TESTDIR)/test_lexer.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_lexer $(TESTDIR)/test_lexer.c $(OBJS) -lm
-	@$(BUILDDIR)/test_lexer
+test-lexer: $(OBJS) $(TESTDIR)/test_lex.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_lex $(TESTDIR)/test_lex.c $(OBJS) -lm
+	@$(BUILDDIR)/test_lex
 
-test-parser: $(OBJS) $(TESTDIR)/test_parser.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_parser $(TESTDIR)/test_parser.c $(OBJS) -lm
-	@$(BUILDDIR)/test_parser
+test-parser: $(OBJS) $(TESTDIR)/test_par.c
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_par $(TESTDIR)/test_par.c $(OBJS) -lm
+	@$(BUILDDIR)/test_par
 
-test-tos-gfx: $(OBJS) $(TESTDIR)/test_tos_gfx.c
-	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_tos_gfx $(TESTDIR)/test_tos_gfx.c $(OBJS) -lm
-	@$(BUILDDIR)/test_tos_gfx
+test-tos-gfx: $(OBJS) $(TESTDIR)/test_gfx.c
+	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_gfx $(TESTDIR)/test_gfx.c $(OBJS) -lm
+	@$(BUILDDIR)/test_gfx
 
 test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas
 	@echo "=== All tests done ==="

@@ -1,6 +1,6 @@
 /*
- * test_runtime.c - Tests du moteur d'execution GFA Basic 3.5
- * ==========================================================
+ * test_rt.c - Tests du moteur d'execution GFA Basic 3.5
+ * =====================================================
  * Valide : runtime lifecycle, variables, value stack, bytecode,
  *          execution, conditions, arrays, et nouvelles fonctions.
  * Mise a jour : 7 juin 2026.

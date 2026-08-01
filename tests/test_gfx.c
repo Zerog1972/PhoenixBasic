@@ -1,6 +1,6 @@
 /*
- * test_tos_gfx.c - Tests TOS (GEMDOS/BIOS/XBIOS) et Graphisme ANSI
- * ==================================================================
+ * test_gfx.c - Tests TOS (GEMDOS/BIOS/XBIOS) et Graphisme ANSI
+ * =============================================================
  */
 
 #include "runtime.h"

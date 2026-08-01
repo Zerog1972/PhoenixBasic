@@ -69,9 +69,9 @@ BEEP/SOUND, EVERY/AFTER, ON ERROR/ON BREAK/ERROR/ERR/FATAL, TRON/TROFF
 
 | Test | Résultat |
 |------|----------|
-| test_os_layer | **102/102** ✅ |
-| test_runtime | **72/72** ✅ |
-| test_lexer | **39/39** ✅ |
-| test_parser | **23/23** ✅ |
+| test_os | **102/102** ✅ |
+| test_rt | **72/72** ✅ |
+| test_lex | **39/39** ✅ |
+| test_par | **23/23** ✅ |
 | test_if.bas | **31/31** ✅ |
 | Total | **267 — 100%** ✅ |

@@ -108,7 +108,7 @@ Ces fonctionnalités traversent déjà tout le pipeline (token → parser → AS
 | 7 | TYPE() | ✅ TOK_TYPE_TOK | ✅ | ✅ | ❌ | Infime | `runtime.c` |
 | 8 | PAUSE | ✅ TOK_PAUSE | ✅ | ✅ | ❌ | Infime | `runtime.c` |
 | 9 | DELAY | ✅ TOK_DELAY | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 10 | RANDOMIZE | ✅ TOK_RANDOMIZE | ✅ | ✅ | ❌ | Petit | `runtime.c`, `math_builtin.c/h` |
+| 10 | RANDOMIZE | ✅ TOK_RANDOMIZE | ✅ | ✅ | ❌ | Petit | `runtime.c`, `gfamath.c/h` |
 | 11 | MOUSE/MOUSEX/MOUSEY/MOUSEK/SETMOUSE | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c`, `gfx.c/h` |
 | 12 | STICK/STRIG/PAD*/LPEN*/TOUCH/SPRITE | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c` |
 | 13 | KEYDEF/KEYGET/KEYLOOK/KEYTEST/KEYPRESS/KEYPAD | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c` |
@@ -330,7 +330,7 @@ Ces 5 tableaux sont des alias pour accéder aux paramètres VDI. Parsés comme d
 | `src/graphics/gfx.h` | #11 | 20+ fonctions graphiques | — |
 | `src/os_layer.c` | #5,6,14 | — | SHEL, TOS, FSFIRST |
 | `src/os_layer.h` | #5,6,14 | — | SHEL, TOS |
-| `src/math_builtin.c/h` | #10 | — | — |
+| `src/gfamath.c/h` | #10 | — | — |
 | `src/memory/memory.c` | #16 | — | — |
 | `src/tos/tos.c` | — | — | TOS améliorations |
 | `src/gem/` (nouveau) | — | — | AES complet |

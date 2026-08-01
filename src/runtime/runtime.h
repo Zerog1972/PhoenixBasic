@@ -12,7 +12,7 @@
 
 #include "os_layer.h"
 #include "strings.h"
-#include "math_builtin.h"
+#include "gfamath.h"
 #include "bit_ops.h"
 
 #ifdef __cplusplus

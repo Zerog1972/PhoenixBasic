@@ -10,7 +10,7 @@ main.c ──┬── lexer/    (token.h, keywords.c/h, lexer.c/h)
          ├── codegen/  (codegen.c/h — AST → bytecode)
          └── runtime/  (runtime.c/h — VM à pile, call stack, builtins)
               ├── memory/   (memory.c — symboles, tableaux, DATA)
-              ├── builtins/ (math_builtin.c/h, strings.c/h)
+              ├── builtins/ (gfamath.c/h, strings.c/h)
               ├── io/       (files.c/h)
               ├── events/   (events.c/h — EVERY, AFTER, ON ERROR)
               ├── sound/    (sound.c/h — BEEP, SOUND)
@@ -60,7 +60,7 @@ make clean    # Nettoie build/
 
 ```bash
 ./build/gfabasic                    # Mode interactif (REPL)
-./build/gfabasic demo_complete.bas  # Exécute un fichier .bas
+./build/gfabasic demo_cplt.bas  # Exécute un fichier .bas
 ./build/gfabasic tests/test_if.bas  # Exécute les tests
 ```
 

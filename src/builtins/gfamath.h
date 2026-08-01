@@ -1,6 +1,6 @@
 /*
- * math_builtin.h - Fonctions mathematiques GFA Basic 3.5
- * ======================================================
+ * gfamath.h - Fonctions mathematiques GFA Basic 3.5
+ * =================================================
  * Implemente l'ensemble des fonctions mathematiques integrees :
  * trigonometrie, logarithmes, arrondis, aleatoires, combinaisons.
  *

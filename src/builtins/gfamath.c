@@ -1,13 +1,13 @@
 /*
- * math_builtin.c - Implementation des fonctions mathematiques
- * ===========================================================
+ * gfamath.c - Implementation des fonctions mathematiques
+ * ======================================================
  * Fonctions trigonometriques, logarithmes, arrondis, aleatoires.
  * Conventions C89 strictes.
  *
  * Reference : cahier-des-charges-gfabasic.md, section 8.8
  */
 
-#include "math_builtin.h"
+#include "gfamath.h"
 #include <math.h>
 #include <stdlib.h>
 #include <time.h>

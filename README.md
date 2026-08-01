@@ -8,7 +8,7 @@ Analyse, compile et exécute des programmes `.bas` GFA Basic 3.5. Émule les app
 
 ```bash
 make          # compiler l'émulateur
-./build/gfabasic demo_complete.bas   # exécuter la démo
+./build/gfabasic demo_cplt.bas   # exécuter la démo
 ./build/gfabasic                     # mode interactif (REPL)
 ```
 

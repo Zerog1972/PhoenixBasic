@@ -121,7 +121,7 @@ L'implémentation doit couvrir l'intégralité des **~280 commandes, instruction
 | **Runtime** | `runtime.c`, `runtime.h`, `runtime_types.h` | Boucle d'exécution, gestion de la pile d'appels |
 | **Memory** | `memory.c`, `memory.h` | Gestion des variables, tableaux, chaînes, heap |
 | **Strings** | `strings.c`, `strings.h` | Fonctions de manipulation de chaînes |
-| **Math** | `math_builtin.c`, `math_builtin.h` | Fonctions mathématiques intégrées |
+| **Math** | `gfamath.c`, `gfamath.h` | Fonctions mathématiques intégrées |
 | **Files** | `files.c`, `files.h` | Gestion des fichiers (OPEN, CLOSE, I/O...) |
 | **Graphics** | `graphics.c`, `graphics.h` | Primitives graphiques VDI |
 | **GEM** | `gem_aes.c`, `gem_vdi.c`, `gem_window.c` | Implémentation AES, VDI et fenêtres |
