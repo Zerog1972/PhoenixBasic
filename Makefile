@@ -13,6 +13,19 @@ GFX_LIBS  =
 BUILDDIR  = build
 TESTDIR   = tests
 
+# --- Commandes portables Windows (cmd) / Unix ---
+ifeq ($(OS),Windows_NT)
+  MKDIR  = mkdir
+  TOUCH  = type nul >
+  RMDIR  = rmdir /S /Q
+  RM     = del /Q
+else
+  MKDIR  = mkdir -p
+  TOUCH  = touch
+  RMDIR  = rm -rf
+  RM     = rm -f
+endif
+
 # Tous les .c et leurs objets
 SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/gfamath.c \
        src/builtins/bit_ops.c \
@@ -28,7 +41,7 @@ OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 # Application principale
 APP = $(BUILDDIR)/gfabasic
 
-.PHONY: all app runtime test-os test-rt test-lexer test-parser test-all clean
+.PHONY: all app runtime test-os test-rt test-lexer test-parser test-tos-gfx test-bas test-all clean distclean
 
 all: app
 	@echo "=========================================="
@@ -37,7 +50,7 @@ all: app
 	@echo "=========================================="
 
 app: $(OBJS) src/main.c
-	@mkdir -p $(BUILDDIR)
+	-@$(MKDIR) $(BUILDDIR)
 	$(CC) $(CFLAGS) $(INCLUDES) -o $(APP) src/main.c $(OBJS) -lm
 	@echo "Application built: $(APP)"
 
@@ -49,15 +62,15 @@ $(BUILDDIR)/%.o: src/%.c | $(BUILDDIR)/dirs
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILDDIR)/dirs:
-	@mkdir -p $(BUILDDIR)/utils $(BUILDDIR)/builtins $(BUILDDIR)/io
-	@mkdir -p $(BUILDDIR)/events $(BUILDDIR)/sound $(BUILDDIR)/tos
-	@mkdir -p $(BUILDDIR)/runtime $(BUILDDIR)/memory
-	@mkdir -p $(BUILDDIR)/lexer $(BUILDDIR)/parser $(BUILDDIR)/codegen
-	@mkdir -p $(BUILDDIR)/graphics
-	@touch $(BUILDDIR)/dirs
+	-@$(MKDIR) $(BUILDDIR)/utils $(BUILDDIR)/builtins $(BUILDDIR)/io
+	-@$(MKDIR) $(BUILDDIR)/events $(BUILDDIR)/sound $(BUILDDIR)/tos
+	-@$(MKDIR) $(BUILDDIR)/runtime $(BUILDDIR)/memory
+	-@$(MKDIR) $(BUILDDIR)/lexer $(BUILDDIR)/parser $(BUILDDIR)/codegen
+	-@$(MKDIR) $(BUILDDIR)/graphics
+	-@$(TOUCH) $(BUILDDIR)/dirs
 
 # Tests
-test-os: $(OBJS) $(TESTDIR)/test_os.c
+test-os: $(BUILDDIR)/utils/os_layer.o $(TESTDIR)/test_os.c
 	$(CC) $(CFLAGS) -Isrc/utils -o $(BUILDDIR)/test_os $(TESTDIR)/test_os.c $(BUILDDIR)/utils/os_layer.o -lm
 	@$(BUILDDIR)/test_os
 
@@ -74,7 +87,7 @@ test-parser: $(OBJS) $(TESTDIR)/test_par.c
 	@$(BUILDDIR)/test_par
 
 test-tos-gfx: $(OBJS) $(TESTDIR)/test_gfx.c
-	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_gfx $(TESTDIR)/test_gfx.c $(OBJS) -lm
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_gfx $(TESTDIR)/test_gfx.c $(OBJS) -lm
 	@$(BUILDDIR)/test_gfx
 
 test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas
@@ -82,14 +95,11 @@ test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas
 
 test-bas: $(APP)
 	@echo "=== Running BASIC tests ==="
-	for f in $(TESTDIR)/test_*.bas; do \
-		echo "--- $$(basename $$f) ---"; \
-		$(APP) $$f || exit 1; \
-	done
+	@for %f in ($(TESTDIR)/test_*.bas) do @echo --- %~nxf --- & $(APP) "%f"
 	@echo "=== All BASIC tests done ==="
 
 clean:
-	rm -rf $(BUILDDIR)
-	rm -f __test_*.tmp
+	-@$(RMDIR) $(BUILDDIR)
+	-@$(RM) __test_*.tmp
 
 distclean: clean

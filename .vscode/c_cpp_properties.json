@@ -4,7 +4,24 @@
       "name": "Win32",
       "compilerPath": "C:\\Apps\\mingw64\\bin\\gcc.exe",
       "cStandard": "c89",
-      "intelliSenseMode": "windows-gcc-x64"
+      "intelliSenseMode": "windows-gcc-x64",
+      "includePath": [
+        "${workspaceFolder}/src/utils",
+        "${workspaceFolder}/src/builtins",
+        "${workspaceFolder}/src/io",
+        "${workspaceFolder}/src/events",
+        "${workspaceFolder}/src/sound",
+        "${workspaceFolder}/src/tos",
+        "${workspaceFolder}/src/runtime",
+        "${workspaceFolder}/src/memory",
+        "${workspaceFolder}/src/lexer",
+        "${workspaceFolder}/src/parser",
+        "${workspaceFolder}/src/codegen",
+        "${workspaceFolder}/src/graphics",
+        "C:/Apps/mingw64/x86_64-w64-mingw32/include"
+      ],
+      "defines": ["_WIN32"],
+      "cStandard": "c89"
     }
   ],
   "version": 4
