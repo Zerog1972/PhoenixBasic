@@ -5,7 +5,16 @@
 # Le code est C89 strict : -A (ANSI) est recommande.
 #
 # Options compilateur
--A -O -D__STDC__
+# -A -O -D__STDC__
+
+PHOENIXB.PRG
+
+.C [ -Y ]
+.L [ -Y ]
+
+=
+
+PCSTART.O
 
 # Modules (ordre : utilitaires -> builtins -> noyau)
 src\utils\os_layer.c
@@ -27,4 +36,8 @@ src\graphics\gfx.c
 src\main.c
 
 # Editeur de liens : produit GFABASIC.PRG, librairie LIBM? (float)
--LSLIBM
+# -LSLIBM
+
+PCFLTLIB.LIB
+PCSTDLIB.LIB
+PCTOSLIB.LIB
