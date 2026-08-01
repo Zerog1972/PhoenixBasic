@@ -14,12 +14,7 @@
 #include <string.h>
 #include <ctype.h>
 
-#if !defined(_WIN32) && !defined(_WIN64)
-#include <unistd.h>
-#include <termios.h>
-#else
 #include <conio.h>
-#endif
 
 #include "os_layer.h"
 #include "keywords.h"
@@ -449,11 +444,7 @@ static int parse_range(const char *cmd, int *from, int *to)
 
 static void line_editor(char *buffer, int bufsize)
 {
-    int pos, len, i, c, next, arrow, dummy, back;
-#if defined(_WIN32) || defined(_WIN64)
     /* Windows : lecture simple sans mode raw */
-    (void)pos; (void)len; (void)i; (void)c; (void)next; (void)arrow;
-    (void)dummy; (void)back;
     if (fgets(buffer, bufsize, stdin) != NULL) {
         int llen = (int)strlen(buffer);
         while (llen > 0 && (buffer[llen-1]=='\n'||buffer[llen-1]=='\r'))
@@ -461,114 +452,6 @@ static void line_editor(char *buffer, int bufsize)
     } else {
         buffer[0] = '\0';
     }
-    return;
-#else
-    struct termios oldt, newt;
-
-    /* Si stdin n'est pas un terminal, utiliser fgets */
-    if (!isatty(STDIN_FILENO)) {
-        char line[1024];
-        if (fgets(line, (int)sizeof(line), stdin) != NULL) {
-            int llen = (int)strlen(line);
-            while (llen > 0 && (line[llen-1]=='\n'||line[llen-1]=='\r'))
-                line[--llen] = '\0';
-            if (line[0] != '\0')
-                strncpy(buffer, line, (size_t)bufsize - 1);
-            else
-                buffer[0] = '\0';
-        }
-        return;
-    }
-
-    pos = (int)strlen(buffer);
-    len = pos;
-
-    /* Mode raw */
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);
-    newt.c_cc[VMIN] = 1;
-    newt.c_cc[VTIME] = 0;
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-
-    /* Afficher le texte existant */
-    for (i = 0; i < len; i++) putchar(buffer[i]);
-    fflush(stdout);
-
-    while (1) {
-        c = getchar();
-
-        if (c == '\n' || c == '\r') {
-            /* Valider */
-            buffer[len] = '\0';
-            break;
-        }
-        if (c == 27) { /* ESC pour les sequences et annulation */
-            next = getchar();
-            if (next == '[') {
-                arrow = getchar();
-                if (arrow == 'D' && pos > 0) { /* Gauche */
-                    pos--;
-                    printf("\033[D");
-                    fflush(stdout);
-                } else if (arrow == 'C' && pos < len) { /* Droite */
-                    pos++;
-                    printf("\033[C");
-                    fflush(stdout);
-                } else if (arrow == 'H') { /* Home */
-                    printf("\033[%dD", pos);
-                    pos = 0;
-                    fflush(stdout);
-                } else if (arrow == 'F') { /* End */
-                    printf("\033[%dC", len - pos);
-                    pos = len;
-                    fflush(stdout);
-                } else if (arrow == '3') { /* Delete */
-                    dummy = getchar(); /* ~ */
-                    (void)dummy;
-                    if (pos < len) {
-                        for (i = pos; i < len - 1; i++) buffer[i] = buffer[i + 1];
-                        len--;
-                        printf("\033[P");
-                        fflush(stdout);
-                    }
-                }
-            } else { /* ESC seul = annuler */
-                buffer[0] = '\0';
-                break;
-            }
-        } else if (c == 127 || c == 8) { /* Backspace */
-            if (pos > 0) {
-                for (i = pos - 1; i < len - 1; i++) buffer[i] = buffer[i + 1];
-                len--;
-                pos--;
-                printf("\033[D\033[P");
-                fflush(stdout);
-            }
-        } else if (c >= 32 && c <= 126 && len < bufsize - 1) { /* Caractere imprimable */
-            for (i = len; i > pos; i--) buffer[i] = buffer[i - 1];
-            buffer[pos] = (char)c;
-            len++;
-            pos++;
-            /* Re-afficher la fin de ligne */
-            for (i = pos - 1; i < len; i++) putchar(buffer[i]);
-            /* Reculer le curseur */
-            {
-                back = len - pos;
-                while (back-- > 0) printf("\033[D");
-            }
-            fflush(stdout);
-        }
-    }
-
-    /* Nouvelle ligne */
-    putchar('\n');
-    fflush(stdout);
-
-    /* Restaurer le mode */
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    buffer[len] = '\0';
-#endif
 }
 
 static void repl_mode(void)

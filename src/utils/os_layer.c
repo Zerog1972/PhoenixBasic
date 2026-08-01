@@ -4,24 +4,16 @@
  * Fournit toutes les primitives systeme necessaires a l'emulateur
  * GFA Basic 3.5. Implementation portable en C89 strict.
  *
- * Plateformes supportees :
- *   - Linux/Unix (POSIX)
+ * Plateforme supportee :
  *   - Windows (MinGW/Cygwin)
- *   - macOS (POSIX)
  *
  * Conventions :
  *   - C89 strict (pas de //, pas d'inline, pas de bool, declarations
  *     en tete de bloc)
+ *   - Pas de compilation conditionnelle
  *
  * Reference : cahier-des-charges-gfabasic.md, sections 2.2, 7, 9, 15.2
  */
-
-/*
- * Feature test macros pour C89/POSIX. Doivent etre avant tout include.
- */
-#ifndef _DEFAULT_SOURCE
-#define _DEFAULT_SOURCE
-#endif
 
 #include "os_layer.h"
 
@@ -31,51 +23,21 @@
 #include <time.h>
 #include <ctype.h>
 
+#include <windows.h>
+#include <direct.h>
+#include <io.h>
+#include <conio.h>
+
 /* ------------------------------------------------------------------ */
-/* Sélection de la plateforme                                         */
+/* Macros plateforme Windows                                          */
 /* ------------------------------------------------------------------ */
-#if defined(_WIN32) || defined(_WIN64) || defined(__MINGW32__)
-    #define OS_PLATFORM_WINDOWS 1
-    #include <windows.h>
-    #include <direct.h>
-    #include <io.h>
-    #include <conio.h>
-    #define OS_MKDIR(path)  _mkdir(path)
-    #define OS_RMDIR(path)  _rmdir(path)
-    #define OS_CHDIR(path)  _chdir(path)
-    #define OS_GETCWD(buf,s) _getcwd(buf,s)
-    #define OS_UNLINK(path) _unlink(path)
-    #define OS_RENAME(o,n)  rename(o,n)
-    #define OS_ACCESS(path,m) _access(path,m)
-    #define OS_SLEEP_MS(ms) Sleep(ms)
-    typedef DWORD os_thread_id;
-    /* Pour les fonctions non supportées nativement */
-    #ifndef OS_HAVE_GETTIMEOFDAY
-        #define OS_HAVE_GETTIMEOFDAY 0
-    #endif
-#else
-    /* POSIX (Linux, macOS, BSD, etc.) */
-    #define OS_PLATFORM_POSIX 1
-    #include <unistd.h>
-    #include <sys/stat.h>
-    #include <sys/time.h>
-    #include <sys/types.h>
-    #include <dirent.h>
-    #include <errno.h>
-    #define OS_MKDIR(path)  mkdir(path, 0755)
-    #define OS_RMDIR(path)  rmdir(path)
-    #define OS_CHDIR(path)  chdir(path)
-    #define OS_GETCWD(buf,s) getcwd(buf,s)
-    #define OS_UNLINK(path) unlink(path)
-    #define OS_RENAME(o,n)  rename(o,n)
-    #define OS_ACCESS(path,m) access(path,m)
-    #define OS_SLEEP_MS(ms) usleep((ms) * 1000)
-    #ifdef __APPLE__
-        #define OS_HAVE_GETTIMEOFDAY 1
-    #else
-        #define OS_HAVE_GETTIMEOFDAY 1
-    #endif
-#endif
+#define OS_MKDIR(path)  _mkdir(path)
+#define OS_RMDIR(path)  _rmdir(path)
+#define OS_CHDIR(path)  _chdir(path)
+#define OS_GETCWD(buf,s) _getcwd(buf,s)
+#define OS_UNLINK(path) _unlink(path)
+#define OS_RENAME(o,n)  rename(o,n)
+#define OS_SLEEP_MS(ms) Sleep(ms)
 
 /* ------------------------------------------------------------------ */
 /* Constantes spécifiques Atari ST                                    */
@@ -103,13 +65,6 @@ const unsigned long os_st_palette[16] = {
     0x00FFFF00UL,  /* 14: Jaune          */
     0x00FFFFFFUL   /* 15: Blanc          */
 };
-
-/* Fichier périphérique nul */
-#if defined(OS_PLATFORM_WINDOWS)
-    #define OS_NULL_DEVICE "NUL"
-#else
-    #define OS_NULL_DEVICE "/dev/null"
-#endif
 
 /* ------------------------------------------------------------------ */
 /* État global du module                                              */
@@ -155,9 +110,6 @@ typedef struct {
 static os_channel_entry g_channels[OS_MAX_CHANNELS];
 
 /* Buffer pour os_dir_first/next (émulation FSFIRST/FSNEXT) */
-#if defined(OS_PLATFORM_POSIX)
-static DIR            *g_dir_stream = NULL;
-#endif
 static char            g_dir_pattern[256];
 static int             g_dir_attr_mask;
 
@@ -167,19 +119,11 @@ static int             g_dir_attr_mask;
 
 /*
  * get_ms_now — Retourne le temps courant en millisecondes.
- * Utilise gettimeofday (POSIX) ou GetTickCount (Windows).
+ * Utilise GetTickCount (Windows).
  */
 static os_int32 get_ms_now(void)
 {
-#if defined(OS_PLATFORM_WINDOWS)
     return (os_int32)GetTickCount();
-#elif OS_HAVE_GETTIMEOFDAY
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    return (os_int32)((tv.tv_sec * 1000L) + (tv.tv_usec / 1000L));
-#else
-    return (os_int32)((clock() * 1000L) / CLOCKS_PER_SEC);
-#endif
 }
 
 /*
@@ -395,21 +339,7 @@ os_file_handle os_file_open(const char *name, char gfa_mode, int channel)
 
     fp = fopen(name, c_mode);
     if (fp == NULL) {
-#if defined(OS_PLATFORM_POSIX)
-        if (errno == ENOENT) {
-            g_last_error = OS_ERR_FILE_NOT_FOUND;
-        } else if (errno == EACCES || errno == EROFS) {
-            g_last_error = OS_ERR_ACCESS_DENIED;
-        } else if (errno == ENOSPC || errno == EDQUOT) {
-            g_last_error = OS_ERR_DISK_FULL;
-        } else if (errno == EMFILE || errno == ENFILE) {
-            g_last_error = OS_ERR_TOO_MANY_OPEN;
-        } else {
-            g_last_error = OS_ERR_INTERNAL;
-        }
-#else
         g_last_error = OS_ERR_FILE_NOT_FOUND;
-#endif
         return NULL;
     }
 
@@ -718,11 +648,7 @@ int os_fs_exist(const char *name)
         return OS_FALSE;
     }
 
-#if defined(OS_PLATFORM_WINDOWS)
     if (_access(name, 0) == 0) {
-#else
-    if (access(name, F_OK) == 0) {
-#endif
         g_last_error = OS_ERR_NONE;
         return OS_TRUE;
     }
@@ -884,7 +810,6 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         return OS_ERR_FILE_NOT_FOUND;
     }
 
-#if defined(OS_PLATFORM_WINDOWS)
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
@@ -927,69 +852,6 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         g_last_error = OS_ERR_NONE;
         return 0;
     }
-#else
-    {
-        /* POSIX : utiliser opendir/readdir */
-        char dir_path[256];
-        const char *last_slash;
-        DIR *dir;
-        size_t pattern_len;
-
-        (void)attr; /* Le filtrage par attribut sera fait au niveau GEMDOS */
-
-        /* Extraire le chemin du répertoire à partir du pattern */
-        last_slash = strrchr(pattern, '/');
-#if defined(_WIN32)
-        {
-            const char *bslash = strrchr(pattern, '\\');
-            if (bslash != NULL && (last_slash == NULL || bslash > last_slash)) {
-                last_slash = bslash;
-            }
-        }
-#endif
-        if (last_slash != NULL) {
-            size_t dir_len = (size_t)(last_slash - pattern);
-            if (dir_len >= sizeof(dir_path)) dir_len = sizeof(dir_path) - 1;
-            strncpy(dir_path, pattern, dir_len);
-            dir_path[dir_len] = '\0';
-        } else {
-            strcpy(dir_path, ".");
-        }
-
-        dir = opendir(dir_path);
-        if (dir == NULL) {
-            g_last_error = OS_ERR_NO_MORE_FILES;
-            return OS_ERR_NO_MORE_FILES;
-        }
-
-        /* Sauvegarder le stream pour os_dir_next */
-        if (g_dir_stream != NULL) {
-            closedir(g_dir_stream);
-        }
-        g_dir_stream = dir;
-
-        /* Sauvegarder le pattern */
-        pattern_len = strlen(pattern);
-        if (pattern_len >= sizeof(g_dir_pattern)) {
-            pattern_len = sizeof(g_dir_pattern) - 1;
-        }
-        {
-            size_t copy_len;
-            copy_len = (pattern_len < sizeof(g_dir_pattern) - 1)
-                       ? pattern_len : (sizeof(g_dir_pattern) - 1);
-            strncpy(g_dir_pattern, pattern, copy_len);
-            g_dir_pattern[copy_len] = '\0';
-        }
-        g_dir_attr_mask = attr;
-
-        /* Trouver le premier fichier correspondant */
-        /*
-         * Parcourir les entrées et appeler os_dir_next pour trouver
-         * la première correspondance effective.
-         */
-        return os_dir_next(info);
-    }
-#endif
 }
 
 int os_dir_next(os_file_info *info)
@@ -999,7 +861,6 @@ int os_dir_next(os_file_info *info)
         return OS_ERR_NO_MORE_FILES;
     }
 
-#if defined(OS_PLATFORM_WINDOWS)
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
@@ -1031,92 +892,6 @@ int os_dir_next(os_file_info *info)
         g_last_error = OS_ERR_NONE;
         return 0;
     }
-#else
-    {
-        struct dirent *de;
-        struct stat st;
-        char full_path[512];
-
-        if (g_dir_stream == NULL) {
-            g_last_error = OS_ERR_NO_MORE_FILES;
-            return OS_ERR_NO_MORE_FILES;
-        }
-
-        /*
-         * Parcourir les entrées jusqu'à trouver un fichier
-         * correspondant au pattern (filtrage simplifié).
-         */
-        while ((de = readdir(g_dir_stream)) != NULL) {
-            /* Ignorer . et .. */
-            if (de->d_name[0] == '.' &&
-                (de->d_name[1] == '\0' ||
-                 (de->d_name[1] == '.' && de->d_name[2] == '\0'))) {
-                continue;
-            }
-
-            /* Construire le chemin complet pour stat() */
-            {
-                const char *last_slash;
-                size_t dir_len;
-                last_slash = strrchr(g_dir_pattern, '/');
-                if (last_slash != NULL) {
-                    dir_len = (size_t)(last_slash - g_dir_pattern);
-                    if (dir_len >= sizeof(full_path) - 1) {
-                        dir_len = sizeof(full_path) - 1;
-                    }
-                    strncpy(full_path, g_dir_pattern, dir_len);
-                    full_path[dir_len] = '\0';
-                    strncat(full_path, "/", sizeof(full_path) - strlen(full_path) - 1);
-                } else {
-                    full_path[0] = '\0';
-                }
-            }
-            strncat(full_path, de->d_name, sizeof(full_path) - strlen(full_path) - 1);
-
-            if (stat(full_path, &st) != 0) {
-                continue;
-            }
-
-            /* Remplir les infos */
-            strncpy(info->name, de->d_name, 13);
-            info->name[13] = '\0';
-
-            /* Attributs (conversion POSIX → GEMDOS) */
-            info->attr = 0;
-            if (S_ISDIR(st.st_mode)) info->attr |= 0x10;  /* répertoire */
-            if (!(st.st_mode & S_IWUSR)) info->attr |= 0x01; /* lecture seule */
-
-            info->size = (os_int32)st.st_size;
-
-            /* Date/heure GEMDOS packée */
-            {
-                struct tm *lt;
-                lt = localtime(&st.st_mtime);
-                if (lt != NULL) {
-                    info->date = (os_word)(((lt->tm_year - 80) << 9) |
-                                           ((lt->tm_mon + 1) << 5) |
-                                           lt->tm_mday);
-                    info->time = (os_word)((lt->tm_hour << 11) |
-                                           (lt->tm_min << 5) |
-                                           (lt->tm_sec / 2));
-                } else {
-                    info->date = 0;
-                    info->time = 0;
-                }
-            }
-
-            g_last_error = OS_ERR_NONE;
-            return 0;
-        }
-
-        /* Plus de fichiers */
-        closedir(g_dir_stream);
-        g_dir_stream = NULL;
-
-        g_last_error = OS_ERR_NO_MORE_FILES;
-        return OS_ERR_NO_MORE_FILES;
-    }
-#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -1137,22 +912,10 @@ int os_con_input_char(void)
 
 int os_con_input_key(void)
 {
-#if defined(OS_PLATFORM_WINDOWS)
     if (_kbhit()) {
         return _getch();
     }
     return -1;
-#else
-    /*
-     * POSIX : l'entrée non bloquante nécessite de configurer le
-     * terminal en mode raw. Ceci sera géré par le module console
-     * (console.c) qui utilisera termios/ioctl.
-     *
-     * Pour le moment, retourne -1 (pas de touche).
-     */
-    (void)0;
-    return -1;
-#endif
 }
 
 void os_con_output_char(int c)
@@ -1237,8 +1000,8 @@ void os_con_clear_to_eol(void)
 void os_con_set_echo(int on)
 {
     g_con_echo = on ? 1 : 0;
-    /* L'implémentation réelle nécessite termios (POSIX) ou
-       SetConsoleMode (Windows). Pour le moment, simple flag. */
+    /* L'implémentation réelle nécessite SetConsoleMode (Windows).
+       Pour le moment, simple flag. */
 }
 
 int os_con_get_echo(void)
@@ -1358,8 +1121,8 @@ int os_time_set_date(const char *date_str)
     if (sscanf(date_str, "%d.%d.%d", &day, &month, &year) == 3 ||
         sscanf(date_str, "%d/%d/%d", &month, &day, &year) == 3) {
         /* La modification de la date système nécessite des
-           privilèges root sur POSIX. On stocke simplement la
-           valeur ; le module GEMDOS/TOS pourra l'utiliser. */
+           privilèges. On stocke simplement la valeur ; le module
+           GEMDOS/TOS pourra l'utiliser. */
         g_virtual_clock_active = 1;
         g_virtual_day   = day;
         g_virtual_month = month;
@@ -1557,12 +1320,7 @@ os_int32 os_mem_largest_block(void)
 void os_sound_beep(void)
 {
     /* BEEP : émet un bip système */
-#if defined(OS_PLATFORM_WINDOWS)
     MessageBeep(MB_OK);
-#else
-    fprintf(stdout, "\a");
-    fflush(stdout);
-#endif
 }
 
 int os_sound_init(void)
@@ -1635,20 +1393,17 @@ int os_sys_get_drive(void)
      * Sur Atari ST : 0 = courant, 1 = A:, 2 = B: ...
      * Sur système hôte : retourne 1 pour simuler A:.
      */
-#if defined(OS_PLATFORM_WINDOWS)
     {
         char cwd[256];
         if (_getcwd(cwd, sizeof(cwd)) != NULL && cwd[0] != '\0' && cwd[1] == ':') {
             return (toupper(cwd[0]) - 'A' + 1);
         }
     }
-#endif
     return 1;  /* Simuler lecteur A: */
 }
 
 int os_sys_set_drive(int drive)
 {
-#if defined(OS_PLATFORM_WINDOWS)
     char path[4];
     if (drive < 1 || drive > 26) {
         g_last_error = OS_ERR_INVALID_DRIVE;
@@ -1662,9 +1417,6 @@ int os_sys_set_drive(int drive)
         g_last_error = OS_ERR_INVALID_DRIVE;
         return -1;
     }
-#else
-    (void)drive;
-#endif
     g_last_error = OS_ERR_NONE;
     return 0;
 }

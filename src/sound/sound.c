@@ -33,18 +33,6 @@
  */
 static unsigned char g_ym_regs[16];
 
-/*
- * Notes de musique (frequences en periodes YM a 2 MHz)
- * pour les 4 octaves GFA.
- */
-/* reserve pour usage futur */
-#if 0
-static const int g_note_periods[12] = {
-    3822, 3608, 3405, 3214, 3034, 2863,
-    2703, 2551, 2408, 2273, 2145, 2025
-};
-#endif
-
 /* Etat interne */
 static int  g_sound_initialized = 0;
 static long g_channel_timer[3];   /* Timers de duree par canal */

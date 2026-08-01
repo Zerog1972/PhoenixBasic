@@ -36,18 +36,6 @@ static char *alloc_buffer(size_t size)
     return buf;
 }
 
-/*
- * is_valid_index - Verifie qu'un index (1-indexe) est valide pour s.
- */
-/* reservee pour usage futur */
-#if 0
-static int is_valid_index(const char *s, int idx)
-{
-    if (s == NULL || idx < 1) return 0;
-    return (idx <= (int)strlen(s));
-}
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Fonctions de base                                                  */
 /* ------------------------------------------------------------------ */

@@ -145,24 +145,6 @@ static void free_token_value(gfa_token *token)
     }
 }
 
-/* reservee pour usage futur */
-#if 0
-static void token_copy(gfa_token *dst, gfa_token *src)
-{
-    free_token_value(dst);
-    *dst = *src;
-
-            if (src->type == TOK_STRING && src->value.string_value != NULL) {
-        dst->value.string_value = os_strdup(src->value.string_value);
-    }
-    if ((src->type == TOK_IDENTIFIER || src->type == TOK_LABEL) &&
-        src->value.ident_name != NULL) {
-        dst->value.ident_name = os_strdup(src->value.ident_name);
-        dst->value.string_value = NULL;
-    }
-}
-#endif
-
 /* ------------------------------------------------------------------ */
 /* Avancement dans le source                                          */
 /* ------------------------------------------------------------------ */
