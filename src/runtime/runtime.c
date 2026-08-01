@@ -2500,7 +2500,7 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_CLOSEW:
-            /* CLOSEW : no-op in SDL2 */
+            /* CLOSEW : no-op (pas de gestionnaire de fenetres) */
             break;
 
         case OP_COLOR:
@@ -2526,7 +2526,7 @@ static int execute_instruction(gfa_runtime *rt)
         case OP_BOX_GFX:
         case OP_PBOX_GFX:
         case OP_CIRCLE_GFX:
-            /* Graphics via SDL2 */
+            /* Graphics via gfx.c (framebuffer ANSI C89) */
             {
                 int x1, y1, x2, y2, r;
                 gfa_value *v3, *v4;

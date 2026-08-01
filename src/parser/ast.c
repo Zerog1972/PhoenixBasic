@@ -6,6 +6,7 @@
  */
 
 #include "ast.h"
+#include "os_layer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -97,12 +98,17 @@ ast_node *ast_create_float(ast_node_type type, double value)
     return node;
 }
 
+
+
+
+
+
 ast_node *ast_create_str(ast_node_type type, const char *value)
 {
     ast_node *node;
     node = ast_create(type);
     if (node != NULL) {
-        node->value.str_val = (value != NULL) ? strdup(value) : NULL;
+        node->value.str_val = (value != NULL) ? os_strdup(value) : NULL;
         node->has_str   = (value != NULL) ? 1 : 0;
         node->has_ident = 0;
     }
@@ -112,9 +118,9 @@ ast_node *ast_create_str(ast_node_type type, const char *value)
 ast_node *ast_create_ident(ast_node_type type, const char *name)
 {
     ast_node *node;
-    node = ast_create(type);
+        node = ast_create(type);
     if (node != NULL) {
-        node->value.ident = (name != NULL) ? strdup(name) : NULL;
+        node->value.ident = (name != NULL) ? os_strdup(name) : NULL;
         node->has_str   = 0;
         node->has_ident = (name != NULL) ? 1 : 0;
     }

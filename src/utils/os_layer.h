@@ -77,9 +77,11 @@ typedef enum {
 /* ------------------------------------------------------------------ */
 /* Modes d'ouverture de fichier (compatibles GFA Basic)                */
 /* ------------------------------------------------------------------ */
-#define OS_FMODE_INPUT   "r"   /* "I" : lecture (fichier doit exister) */
-#define OS_FMODE_OUTPUT  "w"   /* "O" : écriture (écrase si existe) */
-#define OS_FMODE_APPEND  "a"   /* "A" : ajout en fin de fichier */
+/* Modes binaires : l'Atari ST n'a pas de conversion CR/LF,
+   les fichiers sont toujours accedes en binaire. */
+#define OS_FMODE_INPUT   "rb"  /* "I" : lecture (fichier doit exister) */
+#define OS_FMODE_OUTPUT  "wb"  /* "O" : écriture (écrase si existe) */
+#define OS_FMODE_APPEND  "ab"  /* "A" : ajout en fin de fichier */
 #define OS_FMODE_RANDOM  "r+b" /* "R" : lecture/écriture aléatoire */
 #define OS_FMODE_UPDATE  "w+b" /* "U" : mise à jour (crée si inexistant) */
 
@@ -573,6 +575,13 @@ void os_mem_copy(void *dst, const void *src, size_t n);
  * os_mem_set — Remplit n octets à l'adresse dst avec la valeur c.
  */
 void os_mem_set(void *dst, int c, size_t n);
+
+/*
+ * os_strdup — Alloue une copie de la chaîne s (équivalent C89 de strdup).
+ * À libérer avec os_mem_free(). Retourne NULL si s==NULL ou si
+ * l'allocation échoue.
+ */
+char* os_strdup(const char *s);
 
 /*
  * os_mem_available — Retourne la mémoire disponible en octets.

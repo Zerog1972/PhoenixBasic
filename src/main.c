@@ -13,8 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+#if !defined(_WIN32) && !defined(_WIN64)
 #include <unistd.h>
 #include <termios.h>
+#else
+#include <conio.h>
+#endif
 
 #include "os_layer.h"
 #include "keywords.h"
@@ -87,7 +92,7 @@ static int run_program(const char *source)
         return 1;
     }
 
-    /* Initialiser le mode graphique (SDL2, 640x400) */
+    /* Initialiser le mode graphique C89 (framebuffer ANSI, 640x400) */
     gfx_init(640, 400);
 
     /* Parser le source */
@@ -161,7 +166,7 @@ static int strieq(const char *a, const char *b)
     return (*a == *b);
 }
 
-static int strnicmp(const char *a, const char *b, int n)
+static int strnicmp_local(const char *a, const char *b, int n)
 {
     int i;
     if (a == NULL || b == NULL) return (a == b) ? 0 : -1;
@@ -183,6 +188,15 @@ typedef struct {
 static prog_line g_lines[MAX_LINES];
 static int g_line_count = 0;
 
+/* Copie bornee de texte dans une ligne (toujours NUL-terminee) */
+static void copy_line_text(char *dst, const char *src, int maxlen)
+{
+    int i;
+    for (i = 0; i < maxlen - 1 && src[i] != '\0'; i++)
+        dst[i] = src[i];
+    dst[i] = '\0';
+}
+
 /* Supprimer des lignes par plage d'index */
 static void delete_lines(int from, int to)
 {
@@ -201,33 +215,32 @@ static void delete_lines(int from, int to)
 /* Lister les lignes */
 static int is_block_opener(const char *line)
 {
-    int n;
-    if (strnicmp(line, "IF", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
-    if (strnicmp(line, "FOR", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) return 1;
-    if (strnicmp(line, "WHILE", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
-    if (strnicmp(line, "REPEAT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
-    if (strnicmp(line, "DO", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
-    if (strnicmp(line, "SELECT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
-    if (strnicmp(line, "PROCEDURE", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
-    if (strnicmp(line, "FUNCTION", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) return 1;
-    if (strnicmp(line, "DEFFN", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
-    if (strnicmp(line, "CASE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
-    if (strnicmp(line, "DEFAULT", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
-    if (strnicmp(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "IF", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
+    if (strnicmp_local(line, "FOR", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) return 1;
+    if (strnicmp_local(line, "WHILE", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp_local(line, "REPEAT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp_local(line, "DO", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) return 1;
+    if (strnicmp_local(line, "SELECT", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp_local(line, "PROCEDURE", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
+    if (strnicmp_local(line, "FUNCTION", 8) == 0 && (line[8] == ' ' || line[8] == '\0')) return 1;
+    if (strnicmp_local(line, "DEFFN", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp_local(line, "CASE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "DEFAULT", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
+    if (strnicmp_local(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
     return 0;
 }
 
 static int is_block_closer(const char *line)
 {
-    if (strnicmp(line, "ENDIF", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
-    if (strnicmp(line, "NEXT", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
-    if (strnicmp(line, "WEND", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
-    if (strnicmp(line, "UNTIL", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
-    if (strnicmp(line, "LOOP", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
-    if (strnicmp(line, "ENDSELECT", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
-    if (strnicmp(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
-    if (strnicmp(line, "RETURN", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
-    if (strnicmp(line, "ENDFUNC", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
+    if (strnicmp_local(line, "ENDIF", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp_local(line, "NEXT", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "WEND", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "UNTIL", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) return 1;
+    if (strnicmp_local(line, "LOOP", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "ENDSELECT", 9) == 0 && (line[9] == ' ' || line[9] == '\0')) return 1;
+    if (strnicmp_local(line, "ELSE", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) return 1;
+    if (strnicmp_local(line, "RETURN", 6) == 0 && (line[6] == ' ' || line[6] == '\0')) return 1;
+    if (strnicmp_local(line, "ENDFUNC", 7) == 0 && (line[7] == ' ' || line[7] == '\0')) return 1;
     return 0;
 }
 
@@ -292,8 +305,10 @@ static void list_lines(int from, int to)
         {
             char fk[64];
             int fi = 0;
-            while (isalpha((unsigned char)text[fi]) && fi < 63)
-                fk[fi++] = toupper((unsigned char)text[fi]);
+            while (isalpha((unsigned char)text[fi]) && fi < 63) {
+                fk[fi] = toupper((unsigned char)text[fi]);
+                fi++;
+            }
             fk[fi] = '\0';
             if (is_block_closer(fk) && indent > 0) indent--;
         }
@@ -303,8 +318,10 @@ static void list_lines(int from, int to)
         {
             char fk[64];
             int fi = 0;
-            while (isalpha((unsigned char)text[fi]) && fi < 63)
-                fk[fi++] = toupper((unsigned char)text[fi]);
+            while (isalpha((unsigned char)text[fi]) && fi < 63) {
+                fk[fi] = toupper((unsigned char)text[fi]);
+                fi++;
+            }
             fk[fi] = '\0';
             if (is_block_closer(fk)) level--;
             if (level < 0) level = 0;
@@ -317,16 +334,18 @@ static void list_lines(int from, int to)
 static char *build_source(void)
 {
     static char buf[131072];
-    int pos = 0;
+    int pos;
     int i;
+    pos = 0;
     for (i = 0; i < g_line_count; i++) {
-        int n;
-        n = snprintf(buf + pos, (size_t)((int)sizeof(buf) - pos),
-                     "%s\n", g_lines[i].text);
-        if (n > 0 && pos + n < (int)sizeof(buf))
-            pos += n;
-        else
-            break;
+        int len;
+        len = (int)strlen(g_lines[i].text);
+        if (pos + len + 1 >= (int)sizeof(buf)) {
+            break;  /* Buffer plein : on stoppe */
+        }
+        strcpy(buf + pos, g_lines[i].text);
+        pos += len;
+        buf[pos++] = '\n';
     }
     buf[pos] = '\0';
     return buf;
@@ -352,8 +371,7 @@ static int load_file_into_editor(const char *filename)
             if (len > 0 && len < MAX_LINE_LEN) {
                 memcpy(text_buf, line_start, (size_t)len);
                 text_buf[len] = '\0';
-                strncpy(g_lines[g_line_count].text, text_buf, MAX_LINE_LEN - 1);
-                g_lines[g_line_count].text[MAX_LINE_LEN - 1] = '\0';
+                copy_line_text(g_lines[g_line_count].text, text_buf, MAX_LINE_LEN);
                 format_line(g_lines[g_line_count].text, MAX_LINE_LEN);
                 g_line_count++;
             }
@@ -432,6 +450,19 @@ static int parse_range(const char *cmd, int *from, int *to)
 static void line_editor(char *buffer, int bufsize)
 {
     int pos, len, i, c, next, arrow, dummy, back;
+#if defined(_WIN32) || defined(_WIN64)
+    /* Windows : lecture simple sans mode raw */
+    (void)pos; (void)len; (void)i; (void)c; (void)next; (void)arrow;
+    (void)dummy; (void)back;
+    if (fgets(buffer, bufsize, stdin) != NULL) {
+        int llen = (int)strlen(buffer);
+        while (llen > 0 && (buffer[llen-1]=='\n'||buffer[llen-1]=='\r'))
+            buffer[--llen] = '\0';
+    } else {
+        buffer[0] = '\0';
+    }
+    return;
+#else
     struct termios oldt, newt;
 
     /* Si stdin n'est pas un terminal, utiliser fgets */
@@ -537,6 +568,7 @@ static void line_editor(char *buffer, int bufsize)
     /* Restaurer le mode */
     tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
     buffer[len] = '\0';
+#endif
 }
 
 static void repl_mode(void)
@@ -615,7 +647,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "list ", 5) == 0) {
+        if (strnicmp_local(line, "list ", 5) == 0) {
             int from, to;
             const char *range = line + 5;
             if (parse_range(range, &from, &to))
@@ -648,7 +680,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "delete ", 7) == 0) {
+        if (strnicmp_local(line, "delete ", 7) == 0) {
             int from, to;
             const char *range = line + 7;
             if (parse_range(range, &from, &to)) {
@@ -660,7 +692,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "edit ", 5) == 0) {
+        if (strnicmp_local(line, "edit ", 5) == 0) {
             int n;
             if (sscanf(line + 5, "%d", &n) == 1 && n >= 1 && n <= g_line_count) {
                 char buf[MAX_LINE_LEN];
@@ -671,9 +703,8 @@ static void repl_mode(void)
                 fflush(stdout);
                 line_editor(buf, MAX_LINE_LEN);
                 if (buf[0] != '\0') {
-                    strncpy(g_lines[n - 1].text, buf, MAX_LINE_LEN - 1);
+                    copy_line_text(g_lines[n - 1].text, buf, MAX_LINE_LEN);
                     format_line(g_lines[n - 1].text, MAX_LINE_LEN);
-                    g_lines[n - 1].text[MAX_LINE_LEN - 1] = '\0';
                     edited = 1;
                     printf("Line %d updated.\n", n);
                 } else {
@@ -691,7 +722,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "insert ", 7) == 0) {
+        if (strnicmp_local(line, "insert ", 7) == 0) {
             int n;
             if (sscanf(line + 7, "%d", &n) == 1 && n >= 0 && n <= g_line_count + 1) {
                 char buf[MAX_LINE_LEN];
@@ -731,9 +762,8 @@ static void repl_mode(void)
                                 g_lines[ci] = g_lines[ci + 1];
                             g_line_count--;
                         } else {
-                            strncpy(g_lines[n - 1].text, buf, MAX_LINE_LEN - 1);
+                            copy_line_text(g_lines[n - 1].text, buf, MAX_LINE_LEN);
                             format_line(g_lines[n - 1].text, MAX_LINE_LEN);
-                            g_lines[n - 1].text[MAX_LINE_LEN - 1] = '\0';
                         }
                     }
                 } else {
@@ -751,12 +781,12 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "renum", 5) == 0) {
+        if (strnicmp_local(line, "renum", 5) == 0) {
             renum_lines();
             continue;
         }
 
-        if (strnicmp(line, "load ", 5) == 0) {
+        if (strnicmp_local(line, "load ", 5) == 0) {
             char fname[256];
             if (sscanf(line + 5, "%255s", fname) == 1) {
                 int flen = (int)strlen(fname);
@@ -775,7 +805,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "save", 4) == 0) {
+        if (strnicmp_local(line, "save", 4) == 0) {
             char fname[256];
             int is_ascii = 0;
             const char *p = line + 4;
@@ -811,7 +841,7 @@ static void repl_mode(void)
             continue;
         }
 
-        if (strnicmp(line, "run ", 4) == 0) {
+        if (strnicmp_local(line, "run ", 4) == 0) {
             char fname[256];
             const char *p = line + 4;
             while (*p == ' ') p++;
@@ -840,8 +870,7 @@ static void repl_mode(void)
         /* --- Mode edition : ajouter au programme --- */
         {
             if (g_line_count < MAX_LINES) {
-                strncpy(g_lines[g_line_count].text, line, MAX_LINE_LEN - 1);
-                g_lines[g_line_count].text[MAX_LINE_LEN - 1] = '\0';
+                copy_line_text(g_lines[g_line_count].text, line, MAX_LINE_LEN);
                 format_line(g_lines[g_line_count].text, MAX_LINE_LEN);
                 g_line_count++;
             } else {

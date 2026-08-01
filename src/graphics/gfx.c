@@ -1,16 +1,41 @@
 /*
- * gfx.c - Implementation graphique SDL2
- * =====================================
- * Primitives Atari ST emulees en SDL2.
+ * gfx.c - Implementation graphique C89 pur (sans SDL2)
+ * =====================================================
+ * Primitives Atari ST emulees dans un framebuffer memoire.
+ * Le rendu est effectue dans le terminal via des sequences
+ * ANSI (blocs 8x16 pixels -> cellules 80x24).
+ *
+ * Aucun composant externe : uniquement libc C89.
  */
 
 #include "gfx.h"
-#include <SDL2/SDL.h>
 
-static SDL_Window   *g_window   = NULL;
-static SDL_Renderer *g_renderer = NULL;
-static int           g_fg_color = 1;
-static int           g_bg_color = 0;
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* Constantes internes                                                */
+/* ------------------------------------------------------------------ */
+
+#define GFX_WIDTH   640
+#define GFX_HEIGHT  400
+
+/* Cellules terminal : 640/8 = 80 colonnes, 384/16 = 24 lignes */
+#define GFX_TERM_COLS  80
+#define GFX_TERM_ROWS  24
+#define GFX_CELL_W     8
+#define GFX_CELL_H     16
+
+/* ------------------------------------------------------------------ */
+/* Etat global                                                        */
+/* ------------------------------------------------------------------ */
+
+static unsigned char *g_fb = NULL;   /* Framebuffer : index palette 0-15 */
+static int g_width  = 0;
+static int g_height = 0;
+static int g_fg_color = 1;   /* 1 = blanc Atari ST */
+static int g_bg_color = 0;   /* 0 = noir Atari ST   */
 
 /* Palette Atari ST 16 couleurs */
 static unsigned long st_palette[16] = {
@@ -32,59 +57,173 @@ static unsigned long st_palette[16] = {
     0x800080   /* 15 Purple      */
 };
 
+/* ------------------------------------------------------------------ */
+/* Helpers prives                                                    */
+/* ------------------------------------------------------------------ */
+
+static void put_pixel(int x, int y, int color)
+{
+    if (x < 0 || x >= g_width || y < 0 || y >= g_height) return;
+    if (color < 0) color = 0;
+    if (color > 15) color = 15;
+    g_fb[(size_t)y * (size_t)g_width + (size_t)x] = (unsigned char)color;
+}
+
+static void draw_hline(int x1, int x2, int y, int color)
+{
+    int x;
+    if (y < 0 || y >= g_height) return;
+    if (x1 > x2) { int t = x1; x1 = x2; x2 = t; }
+    if (x1 < 0) x1 = 0;
+    if (x2 >= g_width) x2 = g_width - 1;
+    for (x = x1; x <= x2; x++) {
+        g_fb[(size_t)y * (size_t)g_width + (size_t)x] = (unsigned char)color;
+    }
+}
+
+static void draw_vline(int y1, int y2, int x, int color)
+{
+    int y;
+    if (x < 0 || x >= g_width) return;
+    if (y1 > y2) { int t = y1; y1 = y2; y2 = t; }
+    if (y1 < 0) y1 = 0;
+    if (y2 >= g_height) y2 = g_height - 1;
+    for (y = y1; y <= y2; y++) {
+        g_fb[(size_t)y * (size_t)g_width + (size_t)x] = (unsigned char)color;
+    }
+}
+
+/* Convertit un index palette Atari ST en code ANSI fond */
+static int ansi_bg_code(int idx)
+{
+    if (idx < 0) idx = 0;
+    if (idx > 15) idx = 15;
+    if (idx < 8)  return 40 + idx;      /* couleurs normales */
+    return 100 + (idx - 8);             /* couleurs brillantes */
+}
+
+/* ------------------------------------------------------------------ */
+/* API publique                                                       */
+/* ------------------------------------------------------------------ */
+
 unsigned long gfx_st_color(int index)
 {
     if (index < 0 || index > 15) return 0xFFFFFF;
     return st_palette[index];
 }
 
-static void set_render_color(int color_idx)
-{
-    unsigned long c;
-    if (color_idx < 0) color_idx = 0;
-    if (color_idx > 15) color_idx = 15;
-    c = st_palette[color_idx];
-    SDL_SetRenderDrawColor(g_renderer,
-        (unsigned char)((c >> 16) & 0xFF),
-        (unsigned char)((c >> 8) & 0xFF),
-        (unsigned char)(c & 0xFF), 255);
-}
-
 int gfx_init(int width, int height)
 {
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) return -1;
-    g_window = SDL_CreateWindow("PhoenixBasic",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        width, height, SDL_WINDOW_SHOWN);
-    if (g_window == NULL) { SDL_Quit(); return -1; }
-    g_renderer = SDL_CreateRenderer(g_window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (g_renderer == NULL) {
-        SDL_DestroyWindow(g_window); g_window = NULL;
-        SDL_Quit(); return -1;
+    size_t px;
+    size_t fb_size;
+
+    if (g_fb != NULL) gfx_shutdown();
+
+    if (width  <= 0) width  = GFX_WIDTH;
+    if (height <= 0) height = GFX_HEIGHT;
+
+    g_width  = width;
+    g_height = height;
+    fb_size  = (size_t)width * (size_t)height;
+    g_fb = (unsigned char *)malloc(fb_size);
+    if (g_fb == NULL) {
+        g_width = 0; g_height = 0;
+        return -1;
     }
-    gfx_clear();
-    gfx_update();
+
+    for (px = 0; px < fb_size; px++) g_fb[px] = (unsigned char)g_bg_color;
+
+    /* Rendu du terminal : curseur en haut a gauche, pas de scroll */
+    printf("\033[2J\033[H");
+    fflush(stdout);
+
     return 0;
 }
 
 void gfx_shutdown(void)
 {
-    if (g_renderer) { SDL_DestroyRenderer(g_renderer); g_renderer = NULL; }
-    if (g_window)   { SDL_DestroyWindow(g_window); g_window = NULL; }
-    SDL_Quit();
+    if (g_fb != NULL) {
+        free(g_fb);
+        g_fb = NULL;
+    }
+    g_width  = 0;
+    g_height = 0;
 }
 
 void gfx_update(void)
 {
-    if (g_renderer) SDL_RenderPresent(g_renderer);
+    int row, col, x, y;
+    int term_h;
+
+    if (g_fb == NULL) return;
+
+    /* Hauteur visible : limitee pour eviter le scroll du terminal */
+    term_h = g_height / GFX_CELL_H;
+    if (term_h > GFX_TERM_ROWS) term_h = GFX_TERM_ROWS;
+    if (term_h <= 0) term_h = 1;
+
+    /* Curseur en haut a gauche */
+    printf("\033[H");
+    fflush(stdout);
+
+    for (row = 0; row < term_h; row++) {
+        int prev_bg = -1;
+        int prev_fg = -1;
+        for (col = 0; col < GFX_TERM_COLS; col++) {
+            /* Couleurs dominantes dans la cellule 8x16 */
+            int counts[16];
+            int best = 0, best_count = 0;
+            int c;
+            int x0 = col * GFX_CELL_W;
+            int y0 = row * GFX_CELL_H;
+            int x1 = x0 + GFX_CELL_W;
+            int y1 = y0 + GFX_CELL_H;
+
+            for (c = 0; c < 16; c++) counts[c] = 0;
+
+            for (y = y0; y < y1 && y < g_height; y++) {
+                for (x = x0; x < x1 && x < g_width; x++) {
+                    int idx = g_fb[(size_t)y * (size_t)g_width + (size_t)x];
+                    counts[idx]++;
+                }
+            }
+
+            for (c = 0; c < 16; c++) {
+                if (counts[c] > best_count) {
+                    best_count = counts[c];
+                    best = c;
+                }
+            }
+
+            /* Couleurs terminal : fg = contour de la cellule, bg = dominante.
+               On dessine un espace sur fond de la couleur dominante. */
+            {
+                int bg = ansi_bg_code(best);
+                int fg = ansi_bg_code(best);
+                (void)fg;
+
+                if (bg != prev_bg) {
+                    printf("\033[0;%dm", bg);
+                    prev_bg = bg;
+                }
+                putchar(' ');
+            }
+            (void)prev_fg;
+        }
+        printf("\033[0m");
+        if (row < term_h - 1) putchar('\n');
+    }
+    fflush(stdout);
 }
 
 void gfx_clear(void)
 {
-    if (g_renderer == NULL) return;
-    set_render_color(g_bg_color);
-    SDL_RenderClear(g_renderer);
+    size_t px;
+    size_t fb_size;
+    if (g_fb == NULL) return;
+    fb_size = (size_t)g_width * (size_t)g_height;
+    for (px = 0; px < fb_size; px++)
+        g_fb[px] = (unsigned char)g_bg_color;
 }
 
 void gfx_color(int fg, int bg)
@@ -95,50 +234,61 @@ void gfx_color(int fg, int bg)
 
 void gfx_line(int x1, int y1, int x2, int y2)
 {
-    if (g_renderer == NULL) return;
-    set_render_color(g_fg_color);
-    SDL_RenderDrawLine(g_renderer, x1, y1, x2, y2);
+    /* Algorithme de Bresenham */
+    int dx, dy, sx, sy, err, e2;
+
+    if (g_fb == NULL) return;
+
+    dx = x2 - x1;
+    if (dx < 0) dx = -dx;
+    dy = y2 - y1;
+    if (dy < 0) dy = -dy;
+    sx = (x1 < x2) ? 1 : -1;
+    sy = (y1 < y2) ? 1 : -1;
+    err = dx - dy;
+
+    for (;;) {
+        put_pixel(x1, y1, g_fg_color);
+        if (x1 == x2 && y1 == y2) break;
+        e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x1 += sx; }
+        if (e2 <  dx) { err += dx; y1 += sy; }
+    }
 }
 
 void gfx_box(int x1, int y1, int x2, int y2)
 {
-    SDL_Rect r;
-    if (g_renderer == NULL) return;
-    set_render_color(g_fg_color);
-    r.x = x1; r.y = y1;
-    r.w = x2 - x1; r.h = y2 - y1;
-    if (r.w < 0) { r.x = x2; r.w = -r.w; }
-    if (r.h < 0) { r.y = y2; r.h = -r.h; }
-    SDL_RenderDrawRect(g_renderer, &r);
+    if (g_fb == NULL) return;
+    draw_hline(x1, x2, y1, g_fg_color);
+    draw_hline(x1, x2, y2, g_fg_color);
+    draw_vline(y1, y2, x1, g_fg_color);
+    draw_vline(y1, y2, x2, g_fg_color);
 }
 
 void gfx_fill_box(int x1, int y1, int x2, int y2)
 {
-    SDL_Rect r;
-    if (g_renderer == NULL) return;
-    set_render_color(g_fg_color);
-    r.x = x1; r.y = y1;
-    r.w = x2 - x1; r.h = y2 - y1;
-    if (r.w < 0) { r.x = x2; r.w = -r.w; }
-    if (r.h < 0) { r.y = y2; r.h = -r.h; }
-    SDL_RenderFillRect(g_renderer, &r);
+    int y;
+    if (g_fb == NULL) return;
+    if (y1 > y2) { int t = y1; y1 = y2; y2 = t; }
+    for (y = y1; y <= y2; y++)
+        draw_hline(x1, x2, y, g_fg_color);
 }
 
 void gfx_circle(int x, int y, int r)
 {
     int px, py;
-    if (g_renderer == NULL || r <= 0) return;
-    set_render_color(g_fg_color);
+    if (g_fb == NULL || r <= 0) return;
+
     px = r - 1; py = 0;
     while (px >= py) {
-        SDL_RenderDrawPoint(g_renderer, x + px, y + py);
-        SDL_RenderDrawPoint(g_renderer, x + py, y + px);
-        SDL_RenderDrawPoint(g_renderer, x - py, y + px);
-        SDL_RenderDrawPoint(g_renderer, x - px, y + py);
-        SDL_RenderDrawPoint(g_renderer, x - px, y - py);
-        SDL_RenderDrawPoint(g_renderer, x - py, y - px);
-        SDL_RenderDrawPoint(g_renderer, x + py, y - px);
-        SDL_RenderDrawPoint(g_renderer, x + px, y - py);
+        put_pixel(x + px, y + py, g_fg_color);
+        put_pixel(x + py, y + px, g_fg_color);
+        put_pixel(x - py, y + px, g_fg_color);
+        put_pixel(x - px, y + py, g_fg_color);
+        put_pixel(x - px, y - py, g_fg_color);
+        put_pixel(x - py, y - px, g_fg_color);
+        put_pixel(x + py, y - px, g_fg_color);
+        put_pixel(x + px, y - py, g_fg_color);
         py++;
         if ((px * px + py * py - r * r) > 0) px--;
     }
@@ -147,17 +297,17 @@ void gfx_circle(int x, int y, int r)
 void gfx_fill_circle(int x, int y, int r)
 {
     int px, py, i;
-    if (g_renderer == NULL || r <= 0) return;
-    set_render_color(g_fg_color);
+    if (g_fb == NULL || r <= 0) return;
+
     px = r; py = 0;
     while (px >= py) {
         for (i = x - px; i <= x + px; i++) {
-            SDL_RenderDrawPoint(g_renderer, i, y + py);
-            SDL_RenderDrawPoint(g_renderer, i, y - py);
+            put_pixel(i, y + py, g_fg_color);
+            put_pixel(i, y - py, g_fg_color);
         }
         for (i = x - py; i <= x + py; i++) {
-            SDL_RenderDrawPoint(g_renderer, i, y + px);
-            SDL_RenderDrawPoint(g_renderer, i, y - px);
+            put_pixel(i, y + px, g_fg_color);
+            put_pixel(i, y - px, g_fg_color);
         }
         py++;
         if ((px * px + py * py - r * r) > 0) px--;

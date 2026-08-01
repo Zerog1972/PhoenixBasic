@@ -584,6 +584,9 @@ gfa_bytecode *gfa_bytecode_create(void)
     bc->capacity = GFA_BYTECODE_INIT_SIZE;
     bc->strings  = NULL;
     bc->str_count = 0;
+    bc->data_values = NULL;
+    bc->data_count  = 0;
+    bc->data_ptr    = 0;
 
     return bc;
 }

@@ -39,6 +39,7 @@
     #include <windows.h>
     #include <direct.h>
     #include <io.h>
+    #include <conio.h>
     #define OS_MKDIR(path)  _mkdir(path)
     #define OS_RMDIR(path)  _rmdir(path)
     #define OS_CHDIR(path)  _chdir(path)
@@ -153,12 +154,12 @@ typedef struct {
 
 static os_channel_entry g_channels[OS_MAX_CHANNELS];
 
-/* Buffer pour os_dir_first/next (émulation FSFIRST/FSNEXT sur POSIX) */
+/* Buffer pour os_dir_first/next (émulation FSFIRST/FSNEXT) */
 #if defined(OS_PLATFORM_POSIX)
 static DIR            *g_dir_stream = NULL;
+#endif
 static char            g_dir_pattern[256];
 static int             g_dir_attr_mask;
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Fonctions utilitaires internes                                     */
@@ -887,7 +888,6 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
-        int found;
 
         hFind = FindFirstFile(pattern, &find_data);
         if (hFind == INVALID_HANDLE_VALUE) {
@@ -923,7 +923,6 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         }
 
         FindClose(hFind);
-        found = 1; /* Marque trouvé */
 
         g_last_error = OS_ERR_NONE;
         return 0;
@@ -1004,7 +1003,6 @@ int os_dir_next(os_file_info *info)
     {
         WIN32_FIND_DATA find_data;
         HANDLE hFind;
-        int found;
 
         hFind = FindFirstFile(g_dir_pattern, &find_data);
         if (hFind == INVALID_HANDLE_VALUE) {
@@ -1506,6 +1504,25 @@ void os_mem_set(void *dst, int c, size_t n)
     if (dst != NULL && n > 0) {
         memset(dst, c, n);
     }
+}
+
+char* os_strdup(const char *s)
+{
+    size_t len;
+    char  *dup;
+
+    if (s == NULL) {
+        g_last_error = OS_ERR_NONE;
+        return NULL;
+    }
+    len = strlen(s);
+    dup = (char *)os_mem_alloc(len + 1);
+    if (dup == NULL) {
+        return NULL;  /* g_last_error deja positionne par os_mem_alloc */
+    }
+    os_mem_copy(dup, s, len + 1);
+    g_last_error = OS_ERR_NONE;
+    return dup;
 }
 
 os_int32 os_mem_available(os_int32 *total)

@@ -9,6 +9,7 @@
 
 #include "parser.h"
 #include "keywords.h"
+#include "os_layer.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -262,8 +263,8 @@ static ast_node *parse_statement(gfa_parser *parser)
                     label_name = gfa_keyword_get_name(
                         parser->lexer->current.type);
                 }
-                if (label_name != NULL && label_name[0] != ' ') {
-                    node->value.ident = strdup(label_name);
+                if (label_name != NULL && label_name[0] != '\0') {
+                    node->value.ident = os_strdup(label_name);
                     node->has_ident = 1;
                 }
                 gfa_lexer_next(parser->lexer);
@@ -282,8 +283,8 @@ static ast_node *parse_statement(gfa_parser *parser)
                     label_name = gfa_keyword_get_name(
                         parser->lexer->current.type);
                 }
-                if (label_name != NULL && label_name[0] != ' ') {
-                    node->value.ident = strdup(label_name);
+                if (label_name != NULL && label_name[0] != '\0') {
+                    node->value.ident = os_strdup(label_name);
                     node->has_ident = 1;
                 }
                 gfa_lexer_next(parser->lexer);
@@ -713,7 +714,7 @@ static ast_node *parse_statement(gfa_parser *parser)
                 node = ast_create_ident(AST_LABEL, lbl);
                 /* Enregistrer le label */
                 if (parser->label_count < 256 && lbl != NULL) {
-                    parser->labels[parser->label_count].name = strdup(lbl);
+                    parser->labels[parser->label_count].name = os_strdup(lbl);
                     parser->labels[parser->label_count].ast_node_index = 0;
                     parser->label_count++;
                 }
@@ -811,8 +812,8 @@ static ast_node *parse_statement(gfa_parser *parser)
                     label_name = gfa_keyword_get_name(
                         parser->lexer->current.type);
                 }
-                if (label_name != NULL && label_name[0] != ' ') {
-                    node->value.ident = strdup(label_name);
+                if (label_name != NULL && label_name[0] != '\0') {
+                    node->value.ident = os_strdup(label_name);
                     node->has_ident = 1;
                 }
                 gfa_lexer_next(parser->lexer);
@@ -1533,11 +1534,11 @@ static ast_node *parse_procedure(gfa_parser *parser)
     /* Nom */
     if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
         node->value.ident =
-            strdup(parser->lexer->current.value.ident_name);
+            os_strdup(parser->lexer->current.value.ident_name);
         node->has_ident = 1;
         /* Register procedure name as a label for GOSUB resolution */
         if (parser->label_count < 256 && node->value.ident) {
-            parser->labels[parser->label_count].name = strdup(node->value.ident);
+            parser->labels[parser->label_count].name = os_strdup(node->value.ident);
             parser->labels[parser->label_count].ast_node_index = 0;
             parser->label_count++;
         }
@@ -1606,11 +1607,11 @@ static ast_node *parse_function(gfa_parser *parser)
     /* Nom */
     if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
         node->value.ident =
-            strdup(parser->lexer->current.value.ident_name);
+            os_strdup(parser->lexer->current.value.ident_name);
         node->has_ident = 1;
         /* Enregistrer comme label pour resolution d'appel */
         if (parser->label_count < 256 && node->value.ident) {
-            parser->labels[parser->label_count].name = strdup(node->value.ident);
+            parser->labels[parser->label_count].name = os_strdup(node->value.ident);
             parser->labels[parser->label_count].ast_node_index = 0;
             parser->label_count++;
         }
@@ -1679,10 +1680,10 @@ static ast_node *parse_deffn(gfa_parser *parser)
     /* Nom */
     if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
         node->value.ident =
-            strdup(parser->lexer->current.value.ident_name);
+            os_strdup(parser->lexer->current.value.ident_name);
         node->has_ident = 1;
         if (parser->label_count < 256 && node->value.ident) {
-            parser->labels[parser->label_count].name = strdup(node->value.ident);
+            parser->labels[parser->label_count].name = os_strdup(node->value.ident);
             parser->labels[parser->label_count].ast_node_index = 0;
             parser->label_count++;
         }
@@ -1990,7 +1991,7 @@ static ast_node *parse_primary(gfa_parser *parser)
                 /* Nom de la fonction */
                 if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
                     call->value.ident =
-                        strdup(parser->lexer->current.value.ident_name);
+                        os_strdup(parser->lexer->current.value.ident_name);
                     call->has_ident = 1;
                     gfa_lexer_next(parser->lexer);
                 }

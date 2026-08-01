@@ -14,6 +14,7 @@
 
 #include "lexer.h"
 #include "keywords.h"
+#include "os_layer.h"
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -151,12 +152,12 @@ static void token_copy(gfa_token *dst, gfa_token *src)
     free_token_value(dst);
     *dst = *src;
 
-    if (src->type == TOK_STRING && src->value.string_value != NULL) {
-        dst->value.string_value = strdup(src->value.string_value);
+            if (src->type == TOK_STRING && src->value.string_value != NULL) {
+        dst->value.string_value = os_strdup(src->value.string_value);
     }
     if ((src->type == TOK_IDENTIFIER || src->type == TOK_LABEL) &&
         src->value.ident_name != NULL) {
-        dst->value.ident_name = strdup(src->value.ident_name);
+        dst->value.ident_name = os_strdup(src->value.ident_name);
         dst->value.string_value = NULL;
     }
 }
@@ -705,9 +706,9 @@ static gfa_token_type scan_string(gfa_lexer *lexer)
         ADVANCE(lexer);
     }
 
-    lexer->current.line = start_line;
+        lexer->current.line = start_line;
     lexer->current.column = start_col;
-    lexer->current.value.string_value = strdup(buf);
+    lexer->current.value.string_value = os_strdup(buf);
 
     return TOK_STRING;
 }
@@ -773,7 +774,7 @@ static gfa_token_type scan_identifier(gfa_lexer *lexer)
             /* C'est une etiquette, consommer le ':' */
             lexer->pos     = saved_pos + 1;
             lexer->column  = saved_col + 1;
-            lexer->current.value.ident_name = strdup(buf);
+            lexer->current.value.ident_name = os_strdup(buf);
             return TOK_LABEL;
         }
     }
@@ -799,7 +800,7 @@ static gfa_token_type scan_identifier(gfa_lexer *lexer)
     }
 
     /* Identifiant normal */
-    lexer->current.value.ident_name = strdup(buf);
+    lexer->current.value.ident_name = os_strdup(buf);
     return TOK_IDENTIFIER;
 }
 

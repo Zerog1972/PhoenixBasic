@@ -499,7 +499,7 @@ char *gfa_string(int n, const char *s)
     }
 
     for (i = 0; i < n && (i * slen) < total; i++) {
-        strncpy(result + (i * slen), s, (size_t)slen);
+        memcpy(result + (i * slen), s, (size_t)slen);
     }
     result[total] = '\0';
 

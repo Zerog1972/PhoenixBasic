@@ -1,13 +1,14 @@
 # Makefile - GFA Basic 3.5 Emulator (C89)
 # ========================================
 CC       = gcc
-CFLAGS   = -ansi -pedantic -Wall -Wextra -O2 -D_DEFAULT_SOURCE
+CFLAGS   = -ansi -pedantic-errors -Wall -Wextra -O2
 
 INCLUDES = -Isrc/utils -Isrc/builtins -Isrc/io -Isrc/events -Isrc/sound \
            -Isrc/tos -Isrc/runtime -Isrc/memory -Isrc/lexer -Isrc/parser \
            -Isrc/codegen -Isrc/graphics
 
-GFX_LIBS  = $(shell pkg-config --libs sdl2 2>/dev/null || echo '-lSDL2')
+# Pas de dependance externe : uniquement libc C89
+GFX_LIBS  =
 
 BUILDDIR  = build
 TESTDIR   = tests
@@ -37,7 +38,7 @@ all: app
 
 app: $(OBJS) src/main.c
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(APP) src/main.c $(OBJS) -lm $(GFX_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(APP) src/main.c $(OBJS) -lm
 	@echo "Application built: $(APP)"
 
 runtime: $(OBJS)
@@ -61,19 +62,19 @@ test-os: $(OBJS) $(TESTDIR)/test_os_layer.c
 	@$(BUILDDIR)/test_os
 
 test-rt: $(OBJS) $(TESTDIR)/test_runtime.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_runtime $(TESTDIR)/test_runtime.c $(OBJS) -lm $(GFX_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_runtime $(TESTDIR)/test_runtime.c $(OBJS) -lm
 	@$(BUILDDIR)/test_runtime
 
 test-lexer: $(OBJS) $(TESTDIR)/test_lexer.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_lexer $(TESTDIR)/test_lexer.c $(OBJS) -lm $(GFX_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_lexer $(TESTDIR)/test_lexer.c $(OBJS) -lm
 	@$(BUILDDIR)/test_lexer
 
 test-parser: $(OBJS) $(TESTDIR)/test_parser.c
-	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_parser $(TESTDIR)/test_parser.c $(OBJS) -lm $(GFX_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDES) -o $(BUILDDIR)/test_parser $(TESTDIR)/test_parser.c $(OBJS) -lm
 	@$(BUILDDIR)/test_parser
 
 test-tos-gfx: $(OBJS) $(TESTDIR)/test_tos_gfx.c
-	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_tos_gfx $(TESTDIR)/test_tos_gfx.c $(OBJS) -lm $(GFX_LIBS)
+	$(CC) $(CFLAGS) -Isrc/tos $(INCLUDES) -o $(BUILDDIR)/test_tos_gfx $(TESTDIR)/test_tos_gfx.c $(OBJS) -lm
 	@$(BUILDDIR)/test_tos_gfx
 
 test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas

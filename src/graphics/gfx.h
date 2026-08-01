@@ -1,7 +1,8 @@
 /*
- * gfx.h - Couche graphique SDL2 pour PhoenixBasic
- * ================================================
- * Emule les primitives graphiques Atari ST via SDL2.
+ * gfx.h - Couche graphique C89 pur pour PhoenixBasic
+ * ===================================================
+ * Emule les primitives graphiques Atari ST via un
+ * framebuffer memoire rendu en ANSI (aucune lib externe).
  */
 
 #ifndef GFA_GFX_H
