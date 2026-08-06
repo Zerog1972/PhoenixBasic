@@ -42,9 +42,16 @@
 #define OS_SLEEP_MS(ms)   Sleep(ms)
 #else
 /* ------------------------------------------------------------------ */
-/* Atari ST (Pure C 1.1) : GEMDOS / BIOS / XBIOS                      */
+/* Atari ST : GEMDOS / BIOS / XBIOS                                   */
+/*  - Pure C 1.1 : <tos.h>                                            */
+/*  - gcc-mint (m68k-atari-mintelf) : <osbind.h> + <mint/ostruct.h>   */
 /* ------------------------------------------------------------------ */
+#ifdef GFA_TARGET_MINT
+#include <osbind.h>
+#include <mint/ostruct.h>
+#else
 #include <tos.h>
+#endif
 
 #define OS_MKDIR(path)    Dcreate(path)
 #define OS_RMDIR(path)    Ddelete(path)
@@ -883,7 +890,7 @@ char* os_dir_getcwd(int *len)
             return NULL;
         }
 
-        if (OS_GETCWD(buf, size) != NULL) {
+        if (OS_GETCWD(buf, size) >= 0) {
             length = (int)strlen(buf);
             if (len != NULL) {
                 *len = length;
@@ -957,7 +964,11 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
      */
     {
         int result;
+#ifdef GFA_TARGET_MINT
+        _DTA *dta;
+#else
         DTA *dta;
+#endif
 
         strncpy(g_dir_pattern, pattern, sizeof(g_dir_pattern) - 1);
         g_dir_pattern[sizeof(g_dir_pattern) - 1] = '\0';
@@ -972,7 +983,11 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
         dta = Fgetdta();
         strncpy(info->name, dta->dta_name, 13);
         info->name[13] = '\0';
+#ifdef GFA_TARGET_MINT
+        info->attr = (os_byte)dta->dta_attribute;
+#else
         info->attr = (os_byte)dta->dta_attr;
+#endif
         info->size = (os_int32)dta->dta_size;
         info->time = dta->dta_time;
         info->date = dta->dta_date;
@@ -1024,7 +1039,11 @@ int os_dir_next(os_file_info *info)
 #else
     {
         int result;
+#ifdef GFA_TARGET_MINT
+        _DTA *dta;
+#else
         DTA *dta;
+#endif
 
         result = Fsnext();
         if (result < 0) {
@@ -1035,7 +1054,11 @@ int os_dir_next(os_file_info *info)
         dta = Fgetdta();
         strncpy(info->name, dta->dta_name, 13);
         info->name[13] = '\0';
+#ifdef GFA_TARGET_MINT
+        info->attr = (os_byte)dta->dta_attribute;
+#else
         info->attr = (os_byte)dta->dta_attr;
+#endif
         info->size = (os_int32)dta->dta_size;
         info->time = dta->dta_time;
         info->date = dta->dta_date;
@@ -1502,14 +1525,14 @@ os_int32 os_mem_available(os_int32 *total)
     return (os_int32)(128L * 1024L * 1024L);  /* 128 Mo libres */
 #else
     {
-        long *mem;
+        long mem;
         long total_bytes;
         long free_bytes;
 
-        mem = Malloc(-1L);
-        total_bytes = (long)mem;
-        mem = Malloc(0L);
-        free_bytes = (long)mem;
+        mem = (long)Malloc(-1L);
+        total_bytes = mem;
+        mem = (long)Malloc(0L);
+        free_bytes = mem;
 
         if (total != NULL) {
             *total = (os_int32)total_bytes;
@@ -1684,8 +1707,13 @@ os_int32 os_sys_get_basepage(void)
     g_last_error = OS_ERR_NONE;
     return (os_int32)0x10000L;  /* Adresse factice */
 #else
+#ifdef GFA_TARGET_MINT
+    g_last_error = OS_ERR_NONE;
+    return (os_int32)(size_t)_base;
+#else
     g_last_error = OS_ERR_NONE;
     return (os_int32)(size_t)_BasPag;
+#endif
 #endif
 }
 

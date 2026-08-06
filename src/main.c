@@ -144,8 +144,14 @@ static int run_program(const char *source)
 /* Mode interactif (REPL) - editeur ligne GFA Basic 3.5               */
 /* ------------------------------------------------------------------ */
 
+#ifdef GFA_TARGET_MINT
+/* Atari ST : RAM limitee (1 Mo). Tailles reduites. */
+#define MAX_LINES      1024
+#define MAX_LINE_LEN   128
+#else
 #define MAX_LINES      4096
 #define MAX_LINE_LEN   256
+#endif
 
 /* strieq portable pour C89 */
 static int strieq(const char *a, const char *b)
@@ -326,7 +332,11 @@ static void list_lines(int from, int to)
 /* Assembler le programme en un buffer source */
 static char *build_source(void)
 {
+#ifdef GFA_TARGET_MINT
+    static char buf[65536];
+#else
     static char buf[131072];
+#endif
     int pos;
     int i;
     pos = 0;

@@ -19,6 +19,81 @@ make test-all   # 369+ tests, 100%
 ./build/gfabasic tests/test_if.bas   # 31 tests IF/THEN/ELSE
 ```
 
+## Compilation Atari ST (Windows 11)
+
+Le projet est en **C89 strict** avec une couche d'abstraction OS (`os_layer.c`)
+qui cible aussi bien Windows que l'**Atari ST** (via gcc-mintelf).
+
+### Prérequis
+
+- **MSYS2** (installé automatiquement par `build_atari.bat` si absent)
+- Toolchain **m68k-atari-mintelf** (gcc 68000 + binutils + mintlib + fdlibm)
+
+### Build .PRG
+
+```bat
+build_atari.bat
+```
+
+Ce script installe MSYS2 + la toolchain (via `setup_msys2_toolchain.sh`),
+puis compile :
+
+```
+build\atari\GFABASIC.PRG   (~288 Ko, BSS ~400 Ko → tient en 1 Mo)
+```
+
+Résultat : un **exécutable TOS Atari ST M68K** à copier sur disquette/CF
+ou à lancer dans Hatari/Steem.
+
+### Tester le .PRG (émulateur Hatari)
+
+```bat
+run_atari.bat
+```
+
+Ce script crée une **image disquette** `build\atari\GFABASIC.ST`
+(via `make_floppy.py`, motif FAT12 720 Ko) puis lance Hatari :
+```
+hatari.exe --tos tos.img --disk-a build\atari\GFABASIC.ST --auto A:\GFABASIC.PRG --machine st --memsize 4
+```
+- `--disk-a GFABASIC.ST` : insère l'image disquette dans le lecteur A:
+  (méthode universelle — n'exige pas le support GEMDOS HD, absent de certains compilages Hatari)
+- `--auto A:\GFABASIC.PRG` : démarre automatiquement le programme depuis la disquette
+- `--machine st` : Atari ST 68000
+- `--memsize 4` : 4 Mo de RAM
+- Mode interactif : tapez `QUIT` pour sortir
+- La fenêtre Hatari ferme quand le programme se termine
+
+**Installation manuelle des outils** (le script guide aussi) :
+
+1. **Hatari** (émulateur Windows ≥ 2.6) : https://framagit.org/hatari/hatari/-/releases
+   → décompressez `hatari.exe` dans `tools\hatari\`
+2. **ROM TOS** : une ROM `tos.img` est fournie avec Hatari
+   (ou **EmuTOS** libre : https://emutos.sourceforge.io/)
+   → placez `tos.img` dans `tools\hatari\`
+
+### Compilation manuelle (dans MSYS2)
+
+```bash
+pacman -S --needed --noconfirm make mingw-w64-x86_64-gcc
+bash setup_msys2_toolchain.sh      # une seule fois
+make -f Makefile.atari clean
+make -f Makefile.atari
+```
+
+### Options de compilation croisée
+
+| Option | Rôle |
+|--------|------|
+| `-m68000` | 68000 nu (ST/STE compatibles) |
+| `-mnoshort` | `int` = 32 bits (le code suppose int 32 bits partout) |
+| `-DGFA_TARGET_MINT` | Active la branche `osbind.h`/`_DTA`/`_base` de `os_layer.c` |
+| `-Os` | Optimise la taille (RAM Atari limitée) |
+
+> **Note** : l'ABI historique TOS (`-mshort`, `int` = 16 bits) casserait le code
+> (buffers 4 096 lignes, tailles > 32767). Un audit complet serait nécessaire
+> pour cibler l'ABI Pure C 1.1.
+
 ## Mode interactif (REPL)
 
 Deux modes : **édition** (prompt `n]`) et **commande** (prompt `>`). Une ligne vide bascule.
