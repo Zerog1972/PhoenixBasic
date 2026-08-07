@@ -18,8 +18,16 @@
 /* Constantes internes                                                */
 /* ------------------------------------------------------------------ */
 
+#ifdef GFA_TARGET_MINT
+/* Atari ST : RAM limitee (1-4 Mo). Framebuffer reduit 320x200 (64 Ko),
+   conforme au mode basse resolution ST. Le malloc de 640x400 (256 Ko)
+   depassait la memoire heap mintlib disponible apres le BSS de 400 Ko. */
+#define GFX_WIDTH   320
+#define GFX_HEIGHT  200
+#else
 #define GFX_WIDTH   640
 #define GFX_HEIGHT  400
+#endif
 
 /* Cellules terminal : 640/8 = 80 colonnes, 384/16 = 24 lignes */
 #define GFX_TERM_COLS  80
@@ -31,7 +39,8 @@
 /* Etat global                                                        */
 /* ------------------------------------------------------------------ */
 
-static unsigned char *g_fb = NULL;   /* Framebuffer : index palette 0-15 */
+static unsigned char *g_fb = NULL;     /* Framebuffer : index palette 0-15 */
+static unsigned char g_fb_static[GFX_WIDTH * GFX_HEIGHT];
 static int g_width  = 0;
 static int g_height = 0;
 static int g_fg_color = 1;   /* 1 = blanc Atari ST */
@@ -125,27 +134,37 @@ int gfx_init(int width, int height)
     g_width  = width;
     g_height = height;
     fb_size  = (size_t)width * (size_t)height;
-    g_fb = (unsigned char *)malloc(fb_size);
-    if (g_fb == NULL) {
+
+    /*
+     * Framebuffer STATIQUE dans le BSS : le malloc() de la mintlib
+     * bouclait sur Atari ST (heap fragmentee/fatiguee par le gros
+     * BSS du programme). Un tableau fixe evite tout appel heap.
+     */
+    if (fb_size > sizeof(g_fb_static)) {
         g_width = 0; g_height = 0;
         return -1;
     }
+    g_fb = g_fb_static;
 
     for (px = 0; px < fb_size; px++) g_fb[px] = (unsigned char)g_bg_color;
 
-    /* Rendu du terminal : curseur en haut a gauche, pas de scroll */
+#ifndef GFA_TARGET_MINT
+    /*
+     * Rendu du terminal hote : curseur en haut a gauche, pas de scroll.
+     * Sur Atari ST, ces sequences ANSI ne sont pas gerees par la console
+     * VT52 et bloquaient le programme (verifie sous Hatari/EmuTOS).
+     */
     printf("\033[2J\033[H");
     fflush(stdout);
+#endif
 
     return 0;
 }
 
 void gfx_shutdown(void)
 {
-    if (g_fb != NULL) {
-        free(g_fb);
-        g_fb = NULL;
-    }
+    /* Le framebuffer est statique (BSS) : rien a liberer. */
+    g_fb = NULL;
     g_width  = 0;
     g_height = 0;
 }

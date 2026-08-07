@@ -11,7 +11,7 @@ REM --- Chemins -------------------------------
 set MSYS2_ROOT=C:\msys64
 set BASH=%MSYS2_ROOT%\usr\bin\bash.exe
 set MAKE=%MSYS2_ROOT%\usr\bin\make.exe
-set CC=%MSYS2_ROOT%\usr\bin\m68k-atari-mintelf-gcc.exe
+set CC=%MSYS2_ROOT%\mingw64\bin\m68k-atari-mintelf-gcc.exe
 
 echo.
 echo ================================================================

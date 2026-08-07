@@ -41,14 +41,19 @@ MINT_LIB     = $(MINT_SYSROOT)/usr/lib
 # -Os        : optimise la taille (RAM Atari ST limitee)
 CFLAGS   = -std=c89 -Wall -Wextra -Os \
            -mnoshort -m68000 -fno-common \
-           -DGFA_TARGET_MINT \
-           -I$(MINT_INC)
+           -DGFA_TARGET_MINT
 LDFLAGS  = -L$(MINT_LIB)
 
 # --- Include paths ---
+# ATTENTION : l'ordre est critique !
+#   1. d'abord les includes du projet (-Isrc/...) : le projet possede un
+#      src/builtins/strings.h qui MASQUERAIT sinon le strings.h POSIX
+#      du sysroot mintlib (gardes GFA_STRINGS_H vs _STRINGS_H).
+#   2. ensuite le sysroot mintlib (-I$(MINT_INC)) pour osbind.h/stdio.h...
 INCLUDES = -Isrc/utils -Isrc/builtins -Isrc/io -Isrc/events -Isrc/sound \
            -Isrc/tos -Isrc/runtime -Isrc/memory -Isrc/lexer -Isrc/parser \
-           -Isrc/codegen -Isrc/graphics
+           -Isrc/codegen -Isrc/graphics \
+           -I$(MINT_INC)
 
 # --- Repertoires ---
 BUILDDIR = build/atari
@@ -68,7 +73,12 @@ OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 # --- Executable TOS ---
 APP = $(BUILDDIR)/GFABASIC.PRG
 
-.PHONY: all app clean
+# --- Mini-launcher TOS pour tests automatises (voir run_atari_test.bat) ---
+# IMPORTANT : ne PAS striper RUNNER.PRG - le strip des exe contigus
+# elf32-atariprg cassait le crt0 (Bus Error au demarrage sous Hatari).
+RUNNER = $(BUILDDIR)/RUNNER.PRG
+
+.PHONY: all app runner clean
 
 all: app
 	@echo "=========================================="
@@ -84,6 +94,14 @@ app: $(OBJS) src/main.c
 	@echo "Taille  :"
 	@wc -c < $(APP) | tr -d ' ' | xargs -I{} echo "  {} octets"
 	@file $(APP)
+
+# RUNNER.PRG : launcher qui lance GFABASIC.PRG avec un .bas en argument
+runner: tools/runner.c
+	-@mkdir -p $(BUILDDIR)
+	$(CC) -std=c89 -Os -mnoshort -m68000 -I$(MINT_INC) -o $(RUNNER) tools/runner.c
+	@echo "PRG cree : $(RUNNER)"
+	@wc -c < $(RUNNER) | tr -d ' ' | xargs -I{} echo "  {} octets"
+	@file $(RUNNER)
 
 # Regle generique C -> .o
 $(BUILDDIR)/%.o: src/%.c

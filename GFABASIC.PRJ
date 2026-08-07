@@ -6,6 +6,12 @@
 #
 # Options compilateur
 # -A -O -D__STDC__
+#
+# !!! ATTENTION CRITIQUE : int = 32 bits OBLIGATOIRE !!!
+# Dans Pure C 1.1, ouvrir Options > Compiler et COCHER "Long int"
+# (ABI int = 32 bits). Sans cela, l'ABI historique int = 16 bits
+# CASSE le code (buffers 4096 lignes, tailles > 32767, sscanf, ...).
+# Le code source est C89 strict et suppose int = 32 bits partout.
 
 PHOENIXB.PRG
 

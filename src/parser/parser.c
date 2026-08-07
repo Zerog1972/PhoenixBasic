@@ -1360,7 +1360,7 @@ static ast_node *parse_print(gfa_parser *parser)
 
         sep = gfa_lexer_current_token(parser->lexer);
         if (sep == TOK_SEMICOLON || sep == TOK_COMMA) {
-            ast_add_child(node, ast_create_int(AST_ASSIGN,
+            ast_add_child(node, ast_create_int(AST_PRINT_SEP,
                 (sep == TOK_SEMICOLON) ? 0 : 1));
             gfa_lexer_next(parser->lexer);
             continue;

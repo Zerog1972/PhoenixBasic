@@ -929,10 +929,8 @@ static void cg_select(codegen_ctx *ctx, ast_node *node)
 static int cg_is_print_separator(ast_node *n)
 {
     if (n == NULL) return 0;
-    /* Separateur PRINT : AST_ASSIGN sans nom, sans enfants, valeur 0(=;) ou 1(=,) */
-    if (n->type == AST_ASSIGN && !n->has_ident && !n->left && !n->right
-        && (n->value.int_val == 0 || n->value.int_val == 1)) return 1;
-    return 0;
+    /* Separateur PRINT : noeud dedie cree par le parser (0 = ';', 1 = ',') */
+    return (n->type == AST_PRINT_SEP) ? 1 : 0;
 }
 
 static void cg_print(codegen_ctx *ctx, ast_node *node)
@@ -965,7 +963,7 @@ static void cg_print(codegen_ctx *ctx, ast_node *node)
                 next = arg->right;
                 /* Check if next sibling is a ; separator (suppress newline) */
                 has_semicolon = (next != NULL && cg_is_print_separator(next)
-                                 && next->value.int_val == 0);
+                                 && next->value.float_val == 0.0);
                 if (!has_semicolon) {
                     cg_emit(ctx, OP_PRINT_NL);
                 }

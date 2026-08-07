@@ -61,15 +61,39 @@
 #define OS_RENAME(o,n)    Frename(0, n, o)
 #define OS_SLEEP_MS(ms)   os_tos_delay(ms)
 
+/* Resultat du compteur 200 Hz lu en mode superviseur */
+static os_int32 g_hz200_value = 0;
+
+/*
+ * read_hz200_super — Lit le compteur 200 Hz TOS ($4BA) en mode SUPERVISEUR.
+ * L'adresse $4BA est une variable systeme TOS protegee : un programme
+ * utilisateur n'y a pas acces en lecture directe (Bus Error sous TOS 2.06
+ * et Hatari). Seul le mode superviseur peut la lire.
+ */
+static void read_hz200_super(void)
+{
+    unsigned short *hi;
+    unsigned short *lo;
+
+    hi = (unsigned short *)(size_t)0x4BAUL;
+    lo = (unsigned short *)(size_t)0x4BCUL;
+
+    g_hz200_value = ((os_int32)*hi << 16) | (os_int32)*lo;
+}
+
 /*
  * os_tos_get_hz200 — Lit le compteur 200 Hz du TOS (adresse $4BA).
  * Equivalent LPEEK(&H4BA) de GFA Basic.
+ * Passe en mode superviseur via Supexec() (tos.h Pure C / osbind.h mintlib).
  */
 static os_int32 os_tos_get_hz200(void)
 {
-    unsigned long *p;
-    p = (unsigned long *)(size_t)0x4BAUL;
-    return (os_int32)*p;
+#ifdef GFA_TARGET_MINT
+    Supexec(read_hz200_super);
+#else
+    Supexec(read_hz200_super);
+#endif
+    return g_hz200_value;
 }
 
 /*
@@ -890,7 +914,11 @@ char* os_dir_getcwd(int *len)
             return NULL;
         }
 
-        if (OS_GETCWD(buf, size) >= 0) {
+#ifdef _WIN32
+        if (OS_GETCWD(buf, (int)size) != NULL) {
+#else
+        if (OS_GETCWD(buf, (int)size) >= 0) {
+#endif
             length = (int)strlen(buf);
             if (len != NULL) {
                 *len = length;

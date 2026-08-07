@@ -27,7 +27,7 @@ static const char *g_ast_names[] = {
     "DEFFN", "FN_CALL",
     "DEFBIT", "DEFBYT", "DEFWRD", "DEFNUM", "DEFFLT", "DEFSTR", "DEFDBL",
     "DATA", "READ", "RESTORE",
-    "PRINT", "PRINT_AT", "PRINT_USING", "INPUT", "LINE_INPUT",
+    "PRINT", "PRINT_AT", "PRINT_USING", "PRINT_SEP", "INPUT", "LINE_INPUT",
     "CLS", "LOCATE", "VTAB",
     "OPEN", "CLOSE", "OPENW", "CLOSEW",
     "COLOR", "LINE", "CIRCLE", "BOX", "PBOX", "PCIRCLE",

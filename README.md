@@ -64,6 +64,41 @@ hatari.exe --tos tos.img --disk-a build\atari\GFABASIC.ST --auto A:\GFABASIC.PRG
 - Mode interactif : tapez `QUIT` pour sortir
 - La fenêtre Hatari ferme quand le programme se termine
 
+### Test automatisé non interactif (Hatari)
+
+```bat
+run_atari_test.bat
+```
+
+Exécute automatiquement `tests\test_atari.bas` dans Hatari et affiche le
+résultat (console Atari + erreurs Hatari).
+
+Principe :
+1. **Compile** `tools\runner.c` en `RUNNER.PRG` (`make -f Makefile.atari runner`) —
+   un mini-launcher TOS qui utilise `Pexec()` pour lancer `GFABASIC.PRG`
+   avec `A:\TEST.BAS` en argument (sans lui, les arguments ne peuvent pas être
+   passés automatiquement à un PRG autostarté par Hatari).
+2. **Construit** une disquette multi-fichiers `GFABASIC.ST` contenant
+   GFABASIC.PRG, RUNNER.PRG et TEST.BAS (`make_floppy.py --multi`).
+3. **Lance** Hatari avec :
+   - `--auto A:\RUNNER.PRG` : démarre le launcher (qui lance GFA Basic)
+   - `--conout 2` : redirige la console VT52 vers `simulation_console.txt`
+   - `--benchmark` : mode le plus rapide (vitesse CPU maximale) — indispensable,
+     car le runtime GFA en C compilé est trop lent en mode cycle-exact du 68000
+   - `--run-vbls 4000` : arrêt automatique après 4000 VBL
+4. **Affiche** la console Atari et les diagnostics (Bus Errors, panics).
+
+Points d'attention corrigés durant les tests :
+- **`argv[argc-1]`** : sous MiNT/Pexec, la cmdline GEMDOS inclut le nom du
+  programme en premier token (`argv[1]`), le fichier `.bas` passe donc en
+  dernier argument.
+- **`RUNNER.PRG` ne doit PAS être strippé** : le strip des PRG contigus
+  `elf32-atariprg` cassait le crt0 (Bus Error au démarrage).
+- **Framebuffer graphique statique (BSS) 320×200 sous `GFA_TARGET_MINT`** :
+  le `malloc(256 Ko)` de la mintlib bouclait avec le gros BSS du programme.
+- **`load_file()` en lecture progressive** (sans `fseek`/`ftell`) pour être
+  fiable sous GEMDOS.
+
 **Installation manuelle des outils** (le script guide aussi) :
 
 1. **Hatari** (émulateur Windows ≥ 2.6) : https://framagit.org/hatari/hatari/-/releases

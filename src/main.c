@@ -25,11 +25,17 @@
 /* Charge un fichier en memoire                                       */
 /* ------------------------------------------------------------------ */
 
+/* Taille initiale et increment pour la lecture progressive */
+#define LOAD_FILE_INIT   4096
+#define LOAD_FILE_STEP   4096
+
 static char *load_file(const char *filename)
 {
     FILE *fp;
-    long size;
     char *buffer;
+    size_t capacity;
+    size_t length;
+    size_t got;
 
     fp = fopen(filename, "rb");
     if (fp == NULL) {
@@ -37,31 +43,49 @@ static char *load_file(const char *filename)
         return NULL;
     }
 
-    /* Determiner la taille */
-    fseek(fp, 0, SEEK_END);
-    size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    if (size < 0) {
-        fclose(fp);
-        return NULL;
-    }
-
-    buffer = (char *)malloc((size_t)(size + 1));
+    /*
+     * Lecture PROGRESSIVE jusqu'a EOF (sans fseek/ftell) :
+     * sous mintlib/GEMDOS, ftell() apres fseek(SEEK_END) peut
+     * retourner une taille incoherente -> malloc(taille+1) hors
+     * limites et buffer mal NUL-termine -> le parseur bouclait
+     * en lisant des ordures au-dela du contenu reel.
+     */
+    capacity = LOAD_FILE_INIT;
+    length = 0;
+    buffer = (char *)malloc(capacity);
     if (buffer == NULL) {
         fclose(fp);
         fprintf(stderr, "Error: out of memory\n");
         return NULL;
     }
 
-    if (fread(buffer, 1, (size_t)size, fp) != (size_t)size) {
-        free(buffer);
-        fclose(fp);
-        fprintf(stderr, "Error: cannot read file\n");
-        return NULL;
+    for (;;) {
+        if (length + LOAD_FILE_STEP + 1 > capacity) {
+            size_t new_cap = capacity + LOAD_FILE_STEP;
+            char *new_buf = (char *)realloc(buffer, new_cap);
+            if (new_buf == NULL) {
+                free(buffer);
+                fclose(fp);
+                fprintf(stderr, "Error: out of memory\n");
+                return NULL;
+            }
+            buffer = new_buf;
+            capacity = new_cap;
+        }
+        got = fread(buffer + length, 1, LOAD_FILE_STEP, fp);
+        length += got;
+        if (got < LOAD_FILE_STEP) {
+            if (ferror(fp)) {
+                free(buffer);
+                fclose(fp);
+                fprintf(stderr, "Error: cannot read file\n");
+                return NULL;
+            }
+            break;  /* EOF */
+        }
     }
 
-    buffer[size] = '\0';
+    buffer[length] = '\0';
     fclose(fp);
     return buffer;
 }
@@ -85,8 +109,13 @@ static int run_program(const char *source)
         return 1;
     }
 
-    /* Initialiser le mode graphique C89 (framebuffer ANSI, 640x400) */
-    gfx_init(640, 400);
+    /*
+     * Initialiser le mode graphique C89.
+     * On passe (0,0) pour utiliser les valeurs par defaut conditionnelles
+     * (640x400 sur PC, 320x200 sur Atari ST ou la RAM heap est limitee :
+     * malloc(256 Ko) y echouait et bloquait le programme).
+     */
+    gfx_init(0, 0);
 
     /* Parser le source */
     parser = gfa_parser_init(source);
@@ -145,8 +174,12 @@ static int run_program(const char *source)
 /* ------------------------------------------------------------------ */
 
 #ifdef GFA_TARGET_MINT
-/* Atari ST : RAM limitee (1 Mo). Tailles reduites. */
-#define MAX_LINES      1024
+/*
+ * Atari ST : RAM limitee. Tailles REDUITES pour garder un heap suffisant :
+ * le malloc() de la mintlib boucle en fin de heap. Un gros BSS
+ * (g_lines + build_source + g_fb) evincerait tout le heap libre.
+ */
+#define MAX_LINES      256
 #define MAX_LINE_LEN   128
 #else
 #define MAX_LINES      4096
@@ -333,7 +366,7 @@ static void list_lines(int from, int to)
 static char *build_source(void)
 {
 #ifdef GFA_TARGET_MINT
-    static char buf[65536];
+    static char buf[16384];
 #else
     static char buf[131072];
 #endif
@@ -467,6 +500,7 @@ static void repl_mode(void)
     char line[1024];
     int running;
     int cmd_mode = 0;  /* 0=edition, 1=commandes */
+    int eof_streak = 0;
     
 
     printf("GFA Basic 3.5 Emulator (C89) - Interactive mode\n");
@@ -485,9 +519,22 @@ static void repl_mode(void)
         fflush(stdout);
 
         if (fgets(line, (int)sizeof(line), stdin) == NULL) {
-            printf("\n");
-            break;
+            /*
+             * EOF transitoire : sous TOS/mintlib, chaque saisie console
+             * peut lever un EOF dans le flux stdin. On efface l'etat
+             * d'erreur avec clearerr() et on reessaie. Seuls plusieurs
+             * EOF consecutifs (vraie fermeture du flux, ex: pipe) font
+             * sortir le REPL.
+             */
+            eof_streak++;
+            if (eof_streak >= 3) {
+                printf("\n");
+                break;
+            }
+            clearerr(stdin);
+            continue;
         }
+        eof_streak = 0;
 
         /* Enlever le \n final */
         {
@@ -792,7 +839,16 @@ int main(int argc, char *argv[])
         char *source;
         const char *filename;
 
-        filename = argv[1];
+        /*
+         * Sous MiNT (Pexec), la cmdline GEMDOS inclut le nom du
+         * programme en premier token (le crt0 mintlib ne le retire
+         * pas de la cmdline fournie). On charge donc le DERNIER
+         * argument (argv[argc-1]) : cela reste compatible avec
+         * l'usage direct "./build/gfabasic fichier.bas" (argc=2,
+         * argv[1] = fichier) et avec le launcher TOS qui fournit
+         * "A:\GFABASIC.PRG A:\TEST.BAS" (argv[2] = fichier .bas).
+         */
+        filename = argv[argc - 1];
         printf("GFA Basic 3.5 Emulator\n");
         printf("Loading %s...\n", filename);
 

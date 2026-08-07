@@ -17,17 +17,19 @@ GFX_LIBS  =
 BUILDDIR  = build
 TESTDIR   = tests
 
-# --- Commandes portables Windows (cmd) / Unix ---
-ifeq ($(OS),Windows_NT)
-  MKDIR  = mkdir
-  TOUCH  = type nul >
-  RMDIR  = rmdir /S /Q
-  RM     = del /Q
-else
+# --- Commandes portables Windows (cmd) / Unix (sh/bash) ---
+# Utilise $(SHELL) plutot que $(OS) : sous MSYS2/cygwin, OS=Windows_NT
+# mais SHELL=/bin/sh. Il faut donc detecter le shell Unix si present.
+ifneq ($(findstring sh,$(SHELL)),)
   MKDIR  = mkdir -p
   TOUCH  = touch
   RMDIR  = rm -rf
   RM     = rm -f
+else
+  MKDIR  = mkdir
+  TOUCH  = type nul >
+  RMDIR  = rmdir /S /Q
+  RM     = del /Q
 endif
 
 # Tous les .c et leurs objets
@@ -97,9 +99,16 @@ test-tos-gfx: $(OBJS) $(TESTDIR)/test_gfx.c
 test-all: test-os test-rt test-lexer test-parser test-tos-gfx test-bas
 	@echo "=== All tests done ==="
 
+# Boucle de test portable : syntaxe differente entre sh et cmd.exe
+ifneq ($(findstring sh,$(SHELL)),)
+  TESTBAS_LOOP = for f in $(TESTDIR)/test_*.bas; do echo "--- $$(basename $$f) ---"; $(APP) "$$f"; done
+else
+  TESTBAS_LOOP = for %f in ($(TESTDIR)/test_*.bas) do @echo --- %~nxf --- & $(APP) "%f"
+endif
+
 test-bas: $(APP)
 	@echo "=== Running BASIC tests ==="
-	@for %f in ($(TESTDIR)/test_*.bas) do @echo --- %~nxf --- & $(APP) "%f"
+	@$(TESTBAS_LOOP)
 	@echo "=== All BASIC tests done ==="
 
 clean:

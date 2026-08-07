@@ -70,6 +70,7 @@ typedef enum {
     AST_PRINT,            /* PRINT [#n,] expr...                     */
     AST_PRINT_AT,         /* PRINT AT(x,y); expr                     */
     AST_PRINT_USING,      /* PRINT USING fmt$; expr                  */
+    AST_PRINT_SEP,        /* Separateur PRINT : 0 = ';' , 1 = ','    */
     AST_INPUT,            /* INPUT [prompt;] var...                  */
     AST_LINE_INPUT,       /* LINE INPUT [prompt;] var$               */
     AST_CLS,              /* CLS                                     */
