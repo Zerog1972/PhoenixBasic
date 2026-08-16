@@ -8,6 +8,7 @@
  */
 
 #include "runtime.h"
+#include "vmem.h"
 #include "token.h"
 #include "files.h"
 #include "events.h"
@@ -15,6 +16,7 @@
 #include "tos.h"
 #include "gfx.h"
 #include "strings.h"
+#include "matrix.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -62,6 +64,7 @@ gfa_runtime *gfa_runtime_init(void)
     /* Initialiser les modules */
     gfa_files_init();
     gfa_events_init();
+    vmem_init();  /* memoire virtuelle pour PEEK/POKE/BYTE{}/... */
 
     /* Variables reservees */
     {
@@ -122,6 +125,7 @@ void gfa_runtime_shutdown(gfa_runtime *rt)
 
     rt->running = 0;
 
+    vmem_shutdown();
     gfa_files_shutdown();
     gfa_events_shutdown();
 
@@ -624,6 +628,23 @@ static char *format_using(const char *fmt, double value)
     return result;
 }
 
+/*
+ * gfa_keybuf_pop - Retire le premier code du tampon clavier emule.
+ * Retourne 0 si le tampon est vide.
+ */
+static int gfa_keybuf_pop(gfa_runtime *rt)
+{
+    int code;
+    int i;
+    if (rt->keybuf_count <= 0) return 0;
+    code = rt->keybuf[0];
+    for (i = 1; i < rt->keybuf_count; i++) {
+        rt->keybuf[i - 1] = rt->keybuf[i];
+    }
+    rt->keybuf_count--;
+    return code;
+}
+
 static int execute_instruction(gfa_runtime *rt)
 {
     gfa_instruction *inst;
@@ -645,6 +666,10 @@ static int execute_instruction(gfa_runtime *rt)
     inst    = &rt->program->code[rt->ip];
     op      = inst->opcode;
     operand = inst->operand.int_val;
+    if (getenv("GFA_DBG_IP")) {
+        fprintf(stderr, "DBGIP ip=%d op=%d\n", rt->ip, (int)op);
+        fflush(stderr);
+    }
     result  = 0;
 
     switch (op) {
@@ -667,6 +692,7 @@ static int execute_instruction(gfa_runtime *rt)
                     return -1;
                 return 0;
             }
+            if (var->type != GFA_VAR_ARRAY) rt->last_var = var;
             switch (var->type) {
                 case GFA_VAR_BOOL:
                     gfa_value_push_bool(rt, (var->value.bool_val != 0) ? -1 : 0);
@@ -685,8 +711,10 @@ static int execute_instruction(gfa_runtime *rt)
                     break;
                 case GFA_VAR_STRING:
                     if (var->value.str.data != NULL) {
-                        gfa_value_push_string(rt,
-                            gfa_str_new(var->value.str.data), 1);
+                        gfa_value_push_string_len(rt,
+                            gfa_str_dup_n(var->value.str.data,
+                                          (int)var->value.str.length),
+                            (os_int32)var->value.str.length, 1);
                     } else {
                         gfa_value_push_string(rt, gfa_str_new(""), 1);
                     }
@@ -713,6 +741,7 @@ static int execute_instruction(gfa_runtime *rt)
             var = (gfa_variable *)inst->operand.ptr_val;
             if (var != NULL && rt->sp > 0) {
                 v1 = gfa_value_peek(rt, 0);
+                if (var->type != GFA_VAR_ARRAY) rt->last_var = var;
                 if (v1 != NULL) {
                     switch (var->type) {
                         case GFA_VAR_BOOL:
@@ -731,8 +760,16 @@ static int execute_instruction(gfa_runtime *rt)
                             var->value.float_val = gfa_value_to_float(v1);
                             break;
                         case GFA_VAR_STRING:
-                            gfa_var_set_from_string(var,
-                                (v1->type == GFA_VAL_STRING) ? v1->data.s : "");
+                            if (v1->type == GFA_VAL_STRING &&
+                                v1->str_len > 0 && v1->data.s) {
+                                /* Chaine binaire a longueur explicite */
+                                gfa_var_set_from_string_len(
+                                    var, v1->data.s, v1->str_len);
+                            } else {
+                                gfa_var_set_from_string(var,
+                                    (v1->type == GFA_VAL_STRING)
+                                        ? v1->data.s : "");
+                            }
                             break;
                         default:
                             break;
@@ -743,58 +780,138 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_ARRAY_LOAD:
-            /* Stack: [indices...] ; pop indices, read array element, push value */
-            var = (gfa_variable *)inst->operand.ptr_val;
-            if (var != NULL && var->type == GFA_VAR_ARRAY && var->value.arr.data) {
-                int ndim = var->value.arr.num_dims;
-                if (ndim >= 1 && rt->sp >= ndim) {
-                    int indices[7];
-                    int di;
-                    double *base;
-                    long flat_index = 0;
-                    int stride = 1;
-                    for (di = ndim - 1; di >= 0; di--) {
-                        gfa_value *idx = gfa_value_pop(rt);
-                        if (idx) {
-                            indices[di] = (int)gfa_value_to_long(idx);
+            /* Stack: [indices...] ; pop les indices, lire l'element,
+               push la valeur. operand2.index2 = nombre d'indices :
+               garantit UN resultat meme si la variable n'est pas un
+               tableau (ex : "MAT b = a" avant DIM b). */
+            {
+                int ndim, di;
+                int indices[7];
+                int in_range, valid, sp_ok;
+                double *base;
+                long flat_index = 0;
+                int stride = 1;
+                os_int32 arr_base = 0;
+
+                var = (gfa_variable *)inst->operand.ptr_val;
+                valid = (var != NULL && var->type == GFA_VAR_ARRAY &&
+                         var->value.arr.data != NULL);
+                ndim = 0;
+                if (inst->has_operand2 && inst->operand2.index2 >= 0)
+                    ndim = inst->operand2.index2;
+                if (valid && var->value.arr.num_dims >= 1)
+                    ndim = (ndim > 0) ? ndim : var->value.arr.num_dims;
+                if (ndim < 0) ndim = 0;
+                if (ndim > 7) ndim = 7;
+                if (valid)
+                    arr_base = var->value.arr.base;
+                in_range = 1;
+                sp_ok = 1;
+                for (di = ndim - 1; di >= 0; di--) {
+                    gfa_value *idx;
+                    if (rt->sp >= 1) {
+                        idx = gfa_value_pop(rt);
+                        if (idx != NULL) {
+                            int raw = (int)gfa_value_to_long(idx);
                             os_mem_free(idx);
+                            indices[di] = (valid && arr_base != 0)
+                                ? (raw - (int)arr_base) : raw;
+                            if (valid && arr_base != 0 &&
+                                (indices[di] < 0 ||
+                                 indices[di] >=
+                                  (int)var->value.arr.dim_sizes[di]))
+                                in_range = 0;
+                        } else {
+                            indices[di] = 0;
                         }
+                    } else {
+                        indices[di] = 0;
+                        sp_ok = 0;
+                    }
+                }
+                if (valid && in_range && sp_ok &&
+                    ndim == var->value.arr.num_dims) {
+                    base = (double *)var->value.arr.data;
+                    flat_index = 0;
+                    stride = 1;
+                    for (di = 0; di < ndim; di++) {
                         flat_index += indices[di] * stride;
                         stride *= var->value.arr.dim_sizes[di];
                     }
-                    base = (double *)var->value.arr.data;
                     gfa_value_push_float(rt, base[flat_index]);
+                } else {
+                    gfa_value_push_float(rt, 0.0);
                 }
             }
             break;
 
         case OP_ARRAY_STORE:
-            /* Stack: [indices...] [value] ; pop value, indices, store */
-            var = (gfa_variable *)inst->operand.ptr_val;
-            if (var != NULL && var->type == GFA_VAR_ARRAY && var->value.arr.data) {
-                int ndim = var->value.arr.num_dims;
-                if (ndim >= 1 && rt->sp >= ndim + 1) {
-                    int indices[7];
-                    int di;
-                    double *base;
-                    long flat_index = 0;
-                    int stride = 1;
-                    gfa_value *val = gfa_value_pop(rt);
-                    for (di = ndim - 1; di >= 0; di--) {
-                        gfa_value *idx = gfa_value_pop(rt);
-                        if (idx) {
-                            indices[di] = (int)gfa_value_to_long(idx);
+            /* Stack: [indices...] [value] ; pop value + indices, store.
+               operand2.index2 = nombre d'indices (garantit un depilement
+               propre meme si la variable n'est pas un tableau). */
+            {
+                int ndim, di;
+                int indices[7];
+                int in_range, valid, sp_ok;
+                double *base;
+                long flat_index = 0;
+                int stride = 1;
+                os_int32 arr_base = 0;
+                gfa_value *val = NULL;
+
+                var = (gfa_variable *)inst->operand.ptr_val;
+                valid = (var != NULL && var->type == GFA_VAR_ARRAY &&
+                         var->value.arr.data != NULL);
+                ndim = 0;
+                if (inst->has_operand2 && inst->operand2.index2 >= 0)
+                    ndim = inst->operand2.index2;
+                if (valid && var->value.arr.num_dims >= 1)
+                    ndim = (ndim > 0) ? ndim : var->value.arr.num_dims;
+                if (ndim < 0) ndim = 0;
+                if (ndim > 7) ndim = 7;
+                if (valid)
+                    arr_base = var->value.arr.base;
+                in_range = 1;
+                sp_ok = 1;
+                if (rt->sp >= 1) {
+                    val = gfa_value_pop(rt);
+                } else {
+                    sp_ok = 0;
+                }
+                for (di = ndim - 1; di >= 0; di--) {
+                    gfa_value *idx;
+                    if (rt->sp >= 1) {
+                        idx = gfa_value_pop(rt);
+                        if (idx != NULL) {
+                            int raw = (int)gfa_value_to_long(idx);
                             os_mem_free(idx);
+                            indices[di] = (valid && arr_base != 0)
+                                ? (raw - (int)arr_base) : raw;
+                            if (valid && arr_base != 0 &&
+                                (indices[di] < 0 ||
+                                 indices[di] >=
+                                  (int)var->value.arr.dim_sizes[di]))
+                                in_range = 0;
+                        } else {
+                            indices[di] = 0;
                         }
+                    } else {
+                        indices[di] = 0;
+                        sp_ok = 0;
+                    }
+                }
+                if (valid && in_range && sp_ok && val != NULL &&
+                    ndim == var->value.arr.num_dims) {
+                    base = (double *)var->value.arr.data;
+                    flat_index = 0;
+                    stride = 1;
+                    for (di = 0; di < ndim; di++) {
                         flat_index += indices[di] * stride;
                         stride *= var->value.arr.dim_sizes[di];
                     }
-                    base = (double *)var->value.arr.data;
-                    if (val) {
-                        base[flat_index] = gfa_value_to_float(val);
-                        os_mem_free(val);
-                    }
+                    base[flat_index] = gfa_value_to_float(val);
                 }
+                if (val != NULL) os_mem_free(val);
             }
             break;
 
@@ -1128,6 +1245,12 @@ static int execute_instruction(gfa_runtime *rt)
         /* ---------------------------------------------------------- */
 
         case OP_JMP:
+            /* Garde : operande negatif = saut non patché (label introuvable). */
+            if (operand < 0) {
+                if (!runtime_error(rt, 9, "Jump to undefined label"))
+                    return -1;
+                return 0;
+            }
             rt->ip = (int)operand;
             return 0;  /* Ne pas incrementer ip */
 
@@ -1156,6 +1279,17 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_CALL:
+            if (getenv("GFA_DBG_IP")) {
+                fprintf(stderr, "DBGCALL2: inst->operand.int_val=%d\n",
+                        (int)inst->operand.int_val);
+                fflush(stderr);
+            }
+            /* Garde : un operande negatif = saut non patché (label introuvable). */
+            if (operand < 0) {
+                if (!runtime_error(rt, 9, "Jump to undefined label"))
+                    return -1;
+                return 0;
+            }
             if (rt->call_depth < GFA_MAX_CALL_DEPTH) {
                 gfa_call_frame *frame;
                 frame = &rt->call_stack[rt->call_depth++];
@@ -1165,6 +1299,11 @@ static int execute_instruction(gfa_runtime *rt)
                 frame->proc_index = 0;
                 frame->saved_count = 0;
                 rt->ip = (int)operand;
+                if (getenv("GFA_DBG_IP")) {
+                    fprintf(stderr, "DBGCALLIP: operand=%d newip=%d\n",
+                            (int)operand, rt->ip);
+                    fflush(stderr);
+                }
                 return 0;
             }
             if (!runtime_error(rt, 93, "Stack overflow"))
@@ -1172,7 +1311,6 @@ static int execute_instruction(gfa_runtime *rt)
             return 0;
 
         case OP_RET:
-            fprintf(stderr, "DEBUG OP_RET: call_depth=%d\n", rt->call_depth);
             if (rt->call_depth > 0) {
                 gfa_call_frame *frame;
                 int i;
@@ -1250,8 +1388,11 @@ static int execute_instruction(gfa_runtime *rt)
                                 break;
                             case GFA_VAR_STRING:
                                 if (var->value.str.data)
-                                    gfa_value_push_string(rt,
-                                        gfa_str_new(var->value.str.data), 1);
+                                    gfa_value_push_string_len(rt,
+                                        gfa_str_dup_n(
+                                            var->value.str.data,
+                                            (int)var->value.str.length),
+                                        (os_int32)var->value.str.length, 1);
                                 else
                                     gfa_value_push_string(rt, gfa_str_new(""), 1);
                                 break;
@@ -1357,6 +1498,10 @@ static int execute_instruction(gfa_runtime *rt)
                 double result_f;
                 os_int32 result_l;
                 char *result_s;
+                int sp_before, argc_call, expected_sp;
+
+                sp_before = rt->sp;
+                argc_call = inst->has_operand2 ? inst->operand2.int_val2 : 0;
 
                 func_tok = (gfa_token_type)operand;
                 arg1 = arg2 = arg3 = NULL;
@@ -1374,6 +1519,7 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_SINQ: case TOK_COSQ:
                     case TOK_DEG: case TOK_RAD: case TOK_CFLOAT:
                     case TOK_RND: case TOK_FACT: case TOK_PRED: case TOK_SUCC:
+                    case TOK_VARIAT:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
                             double x = gfa_value_to_float(arg1);
@@ -1405,6 +1551,27 @@ static int execute_instruction(gfa_runtime *rt)
                                 case TOK_RAD:   result_f = gfa_rad(x); break;
                                 case TOK_RND:   result_f = gfa_rnd(x); break;
                                 case TOK_FACT:  result_f = gfa_fact((int)x); break;
+                                case TOK_VARIAT:
+                                    {
+                                        /* VARIAT(n) = n! ; VARIAT(n,k) = n!/(n-k)!
+                                           arg1 deja depile = dernier argument */
+                                        int n, k;
+                                        if (argc_call >= 2) {
+                                            gfa_value *an = gfa_value_pop(rt);
+                                            k = (int)x;  /* arg1 = k */
+                                            if (an) {
+                                                n = (int)gfa_value_to_float(an);
+                                                if (an->owns_string && an->data.s) os_mem_free(an->data.s);
+                                                os_mem_free(an);
+                                            } else {
+                                                n = k;
+                                            }
+                                            result_f = gfa_variat(n, k);
+                                        } else {
+                                            result_f = gfa_variat((int)x, (int)x);
+                                        }
+                                    }
+                                    break;
                                 case TOK_CFLOAT: result_f = x; break;
                                 case TOK_PRED:  result_f = (double)gfa_pred((os_int32)x); break;
                                 case TOK_SUCC:  result_f = (double)gfa_succ((os_int32)x); break;
@@ -1415,9 +1582,29 @@ static int execute_instruction(gfa_runtime *rt)
                         }
                         break;
 
+                    /* RAND(n) / RANDOM(n) : entier aleatoire dans [0, n-1].
+                       Sans argument : entier aleatoire dans [0, 32767]. */
+                    case TOK_RANDOM:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                double n = gfa_value_to_float(arg1);
+                                if (n > 1.0) {
+                                    result_l = (os_int32)gfa_rnd(n);
+                                } else {
+                                    result_l = 0;
+                                }
+                                os_mem_free(arg1);
+                            }
+                        } else {
+                            result_l = (os_int32)gfa_rnd(32768.0);
+                        }
+                        gfa_value_push_long(rt, result_l);
+                        break;
+
                     /* Maths - 2 arguments */
                     case TOK_MIN: case TOK_MAX:
-                    case TOK_COMBIN: case TOK_VARIAT:
+                    case TOK_COMBIN:
                         arg2 = gfa_value_pop(rt);
                         arg1 = gfa_value_pop(rt);
                         if (arg1 && arg2) {
@@ -1427,7 +1614,6 @@ static int execute_instruction(gfa_runtime *rt)
                                 case TOK_MIN: result_f = gfa_min(a, b); break;
                                 case TOK_MAX: result_f = gfa_max(a, b); break;
                                 case TOK_COMBIN: result_f = gfa_combin((int)a, (int)b); break;
-                                case TOK_VARIAT: result_f = gfa_variat((int)a, (int)b); break;
                                 default: break;
                             }
                             gfa_value_push_float(rt, result_f);
@@ -1484,7 +1670,14 @@ static int execute_instruction(gfa_runtime *rt)
                             else
                                 s = "";
                             switch (func_tok) {
-                                case TOK_LEN: result_f = (double)gfa_len(s); gfa_value_push_float(rt, result_f); break;
+                                case TOK_LEN:
+                                    if (arg1->type == GFA_VAL_STRING &&
+                                        arg1->str_len > 0)
+                                        result_f = (double)arg1->str_len;
+                                    else
+                                        result_f = (double)gfa_len(s);
+                                    gfa_value_push_float(rt, result_f);
+                                    break;
                                 case TOK_ASC: result_f = (double)gfa_asc(s); gfa_value_push_float(rt, result_f); break;
                                 case TOK_VAL: result_f = gfa_val(s); gfa_value_push_float(rt, result_f); break;
                                 case TOK_UPPER_TOK: result_s = gfa_upper(s); gfa_value_push_string(rt, result_s, 1); break;
@@ -1596,7 +1789,7 @@ static int execute_instruction(gfa_runtime *rt)
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
                             result_s = gfa_mki(gfa_value_to_long(arg1));
-                            gfa_value_push_string(rt, result_s, 1);
+                            gfa_value_push_string_len(rt, result_s, 2, 1);
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1606,7 +1799,7 @@ static int execute_instruction(gfa_runtime *rt)
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
                             result_s = gfa_mkl(gfa_value_to_long(arg1));
-                            gfa_value_push_string(rt, result_s, 1);
+                            gfa_value_push_string_len(rt, result_s, 4, 1);
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1626,7 +1819,7 @@ static int execute_instruction(gfa_runtime *rt)
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
                             result_s = gfa_mkf(gfa_value_to_float(arg1));
-                            gfa_value_push_string(rt, result_s, 1);
+                            gfa_value_push_string_len(rt, result_s, 6, 1);
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1636,7 +1829,7 @@ static int execute_instruction(gfa_runtime *rt)
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
                             result_s = gfa_mkd(gfa_value_to_float(arg1));
-                            gfa_value_push_string(rt, result_s, 1);
+                            gfa_value_push_string_len(rt, result_s, 8, 1);
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1645,8 +1838,22 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_CVI_TOK:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
-                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                            gfa_value_push_float(rt, (double)(int)gfa_cvi(s));
+                            char tmp[2 + 1];
+                            int bi;
+                            os_int32 slen;
+                            for (bi = 0; bi <= 2; bi++) tmp[bi] = 0;
+                            slen = 0;
+                            if (arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                slen = (arg1->str_len > 0)
+                                    ? arg1->str_len
+                                    : (os_int32)strlen(arg1->data.s);
+                                for (bi = 0; bi < 2 && bi < slen; bi++)
+                                    tmp[bi] = arg1->data.s[bi];
+                            } else {
+                                tmp[0] = 0;
+                            }
+                            gfa_value_push_float(rt, (double)(int)gfa_cvi(tmp));
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1655,8 +1862,22 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_CVL_TOK:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
-                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                            gfa_value_push_long(rt, gfa_cvl(s));
+                            char tmp[4 + 1];
+                            int bi;
+                            os_int32 slen;
+                            for (bi = 0; bi <= 4; bi++) tmp[bi] = 0;
+                            slen = 0;
+                            if (arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                slen = (arg1->str_len > 0)
+                                    ? arg1->str_len
+                                    : (os_int32)strlen(arg1->data.s);
+                                for (bi = 0; bi < 4 && bi < slen; bi++)
+                                    tmp[bi] = arg1->data.s[bi];
+                            } else {
+                                tmp[0] = 0;
+                            }
+                            gfa_value_push_long(rt, gfa_cvl(tmp));
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1665,8 +1886,22 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_CVS_TOK:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
-                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                            gfa_value_push_float(rt, gfa_cvs(s));
+                            char tmp[6 + 1];
+                            int bi;
+                            os_int32 slen;
+                            for (bi = 0; bi <= 6; bi++) tmp[bi] = 0;
+                            slen = 0;
+                            if (arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                slen = (arg1->str_len > 0)
+                                    ? arg1->str_len
+                                    : (os_int32)strlen(arg1->data.s);
+                                for (bi = 0; bi < 6 && bi < slen; bi++)
+                                    tmp[bi] = arg1->data.s[bi];
+                            } else {
+                                tmp[0] = 0;
+                            }
+                            gfa_value_push_float(rt, gfa_cvs(tmp));
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1675,8 +1910,22 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_CVF_TOK:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
-                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                            gfa_value_push_float(rt, gfa_cvf(s));
+                            char tmp[6 + 1];
+                            int bi;
+                            os_int32 slen;
+                            for (bi = 0; bi <= 6; bi++) tmp[bi] = 0;
+                            slen = 0;
+                            if (arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                slen = (arg1->str_len > 0)
+                                    ? arg1->str_len
+                                    : (os_int32)strlen(arg1->data.s);
+                                for (bi = 0; bi < 6 && bi < slen; bi++)
+                                    tmp[bi] = arg1->data.s[bi];
+                            } else {
+                                tmp[0] = 0;
+                            }
+                            gfa_value_push_float(rt, gfa_cvf(tmp));
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1685,8 +1934,22 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_CVD_TOK:
                         arg1 = gfa_value_pop(rt);
                         if (arg1) {
-                            const char *s = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                            gfa_value_push_float(rt, gfa_cvd(s));
+                            char tmp[8 + 1];
+                            int bi;
+                            os_int32 slen;
+                            for (bi = 0; bi <= 8; bi++) tmp[bi] = 0;
+                            slen = 0;
+                            if (arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                slen = (arg1->str_len > 0)
+                                    ? arg1->str_len
+                                    : (os_int32)strlen(arg1->data.s);
+                                for (bi = 0; bi < 8 && bi < slen; bi++)
+                                    tmp[bi] = arg1->data.s[bi];
+                            } else {
+                                tmp[0] = 0;
+                            }
+                            gfa_value_push_float(rt, gfa_cvd(tmp));
                             if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                             os_mem_free(arg1);
                         }
@@ -1860,6 +2123,7 @@ static int execute_instruction(gfa_runtime *rt)
                                     if (buf) {
                                         int nread;
                                         nread = gfa_input_channel(chan, buf, count);
+                                        if (nread < 0) nread = 0; /* EOF/erreur : chaine vide */
                                         buf[nread] = '\0';
                                         result_s = gfa_str_new(buf);
                                         os_mem_free(buf);
@@ -2011,18 +2275,37 @@ static int execute_instruction(gfa_runtime *rt)
 
                     /* PAUSE - attendre une touche */
                     case TOK_PAUSE:
-                        /* PAUSE delay (en 1/50s) */
+                        /* PAUSE delay (en 1/50s) : attend une touche pendant
+                           delay ticks (20 ms/tick), renvoie le code ASCII de
+                           la touche, ou 0 en cas de timeout. */
                         if (rt->sp >= 1) {
                             arg1 = gfa_value_pop(rt);
                             if (arg1) {
                                 int delay_ms = (int)(gfa_value_to_float(arg1) * 20.0);
+                                int waited = 0;
+                                int key = 0;
                                 if (delay_ms < 0) delay_ms = 0;
-                                os_time_delay((os_int32)delay_ms);
+                                /* Tampon emule (KEYPRESS) d'abord */
+                                if (rt->keybuf_count > 0) {
+                                    key = gfa_keybuf_pop(rt);
+                                } else {
+                                    while (waited < delay_ms && key == 0) {
+                                        int c = os_con_input_key();
+                                        if (c > 0) {
+                                            key = c;
+                                        } else {
+                                            os_time_delay(10);
+                                            waited += 10;
+                                        }
+                                    }
+                                }
+                                gfa_value_push_long(rt, (os_int32)key);
                                 if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                                 os_mem_free(arg1);
                             }
+                        } else {
+                            gfa_value_push_long(rt, 0);
                         }
-                        gfa_value_push_long(rt, 0);
                         break;
 
                     /* DELAY - pause en millisecondes */
@@ -2055,7 +2338,8 @@ static int execute_instruction(gfa_runtime *rt)
                         gfa_value_push_long(rt, 0);
                         break;
 
-                    /* Stubs: MOUSE, STICK/STRIG, PAD, LPEN, TOUCH, SPRITE, KEY* */
+                    /* MOUSE / JOYSTICK / PAD / PCE : pas de peripherique
+                       en mode console — retourne 0 (stub honnete). */
                     case TOK_MOUSE:     case TOK_MOUSEX:    case TOK_MOUSEY:
                     case TOK_MOUSEK:    case TOK_SETMOUSE:
                     case TOK_STICK:     case TOK_STRIG:     case TOK_PADX:
@@ -2063,9 +2347,165 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_LPENY:     case TOK_TOUCH:
                     case TOK_STICK_TOK: case TOK_STRIG_TOK: case TOK_PAD_TOK:
                     case TOK_TOUCH_TOK: case TOK_LPEN_TOK:  case TOK_SPRITE:
-                    case TOK_KEYDEF:    case TOK_KEYGET:    case TOK_KEYLOOK:
-                    case TOK_KEYTEST:   case TOK_KEYPRESS:  case TOK_KEYPAD:
                         gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* KEYDEF - redefinition de touche (inexploite en console) */
+                    case TOK_KEYDEF:
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) { if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s); os_mem_free(arg1); }
+                            if (arg2) { if (arg2->owns_string && arg2->data.s) os_mem_free(arg2->data.s); os_mem_free(arg2); }
+                        } else if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) { if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s); os_mem_free(arg1); }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* KEYGET - lit et consomme la prochaine touche */
+                    case TOK_KEYGET:
+                        {
+                            int key = gfa_keybuf_pop(rt);
+                            if (key == 0) {
+                                int c = os_con_input_key();
+                                if (c > 0) key = c;
+                            }
+                            gfa_value_push_long(rt, (os_int32)key);
+                        }
+                        break;
+
+                    /* CONIN - lit un caractere console sans attente.
+                       Retourne la chaine ("" si aucun caractere). */
+                    case TOK_CONIN:
+                        {
+                            int c = os_con_input_key();
+                            if (c > 0) {
+                                char s[2]; s[0] = (char)c; s[1] = '\0';
+                                gfa_value_push_string(rt, gfa_str_new(s), 1);
+                            } else {
+                                gfa_value_push_string(rt, gfa_str_new(""), 1);
+                            }
+                        }
+                        break;
+
+                    /* CONOUT / CONOUTI - ecriture console sans saut de ligne */
+                    case TOK_CONOUT:
+                    case TOK_CONOUTI:
+                        if (rt->sp >= 1) {
+                            gfa_value *s = gfa_value_pop(rt);
+                            if (s && s->type == GFA_VAL_STRING && s->data.s)
+                                os_con_output_string(s->data.s);
+                            if (s) {
+                                if (s->owns_string && s->data.s) os_mem_free(s->data.s);
+                                os_mem_free(s);
+                            }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* KEY n, chaine$ - definit un buffer de touches
+                       (emule : conserve la derniere definition). */
+                    case TOK_KEY:
+                        {
+                            gfa_value *v1 = 0, *v2 = 0;
+                            if (rt->sp >= 2) {
+                                v2 = gfa_value_pop(rt);
+                                v1 = gfa_value_pop(rt);
+                            } else if (rt->sp >= 1) {
+                                v1 = gfa_value_pop(rt);
+                            }
+                            if (v1 && v2 && v2->type == GFA_VAL_STRING &&
+                                v2->data.s)
+                                os_con_output_string(v2->data.s);
+                            if (v1) {
+                                if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s);
+                                os_mem_free(v1);
+                            }
+                            if (v2) {
+                                if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s);
+                                os_mem_free(v2);
+                            }
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* ON KEY GOSUB n - activeur (emule : resultat 0) */
+                    case TOK_ON_KEY:
+                        if (rt->sp >= 1) {
+                            gfa_value *k = gfa_value_pop(rt);
+                            if (k) os_mem_free(k);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* DMACONTROL / DMASOUND / SYSTEM - emules, resultat 0 */
+                    case TOK_DMACONTROL:
+                    case TOK_DMASOUND:
+                    case TOK_SYSTEM:
+                        if (rt->sp >= 1) {
+                            gfa_value *sv = gfa_value_pop(rt);
+                            if (sv) {
+                                if (sv->owns_string && sv->data.s) os_mem_free(sv->data.s);
+                                os_mem_free(sv);
+                            }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* KEYTEST - 1 si une touche est disponible (sans consommer) */
+                    case TOK_KEYTEST:
+                        gfa_value_push_long(rt,
+                            (rt->keybuf_count > 0 || os_con_key_available()) ? 1 : 0);
+                        break;
+
+                    /* KEYLOOK - code de la touche en tete du tampon emule
+                       (approximation console : pas de detection "maintenue") */
+                    case TOK_KEYLOOK:
+                        gfa_value_push_long(rt,
+                            rt->keybuf_count > 0 ? (os_int32)rt->keybuf[0] : 0);
+                        break;
+
+                    /* KEYPRESS - simule une touche (pousse dans le tampon) */
+                    case TOK_KEYPRESS:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                int code;
+                                if (arg1->type == GFA_VAL_STRING &&
+                                    arg1->data.s && arg1->data.s[0]) {
+                                    code = (unsigned char)arg1->data.s[0];
+                                } else {
+                                    code = (int)gfa_value_to_long(arg1);
+                                }
+                                if (rt->keybuf_count < 32) {
+                                    rt->keybuf[rt->keybuf_count++] = code;
+                                }
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* KEYPAD key - 1 si la touche donnee est en tete du tampon */
+                    case TOK_KEYPAD:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                int code = (int)gfa_value_to_long(arg1);
+                                gfa_value_push_long(rt,
+                                    (rt->keybuf_count > 0 && rt->keybuf[0] == code)
+                                        ? 1 : 0);
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
                         break;
 
                     /* TIMER - nombre de ticks depuis boot (1 tick = 1/200s) */
@@ -2101,31 +2541,104 @@ static int execute_instruction(gfa_runtime *rt)
                         break;
 
                     /* BYTE{} / CARD{} / WORD{} / LONG{} / SINGLE{} / DOUBLE{} */
-                    /* Typed memory access (PEEK-like) */
+                    /* Lecture memoire typée via vmem (big-endian 68000). */
                     case TOK_BYTE_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, (os_int32)vmem_read_byte((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
                     case TOK_CARD:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, (os_int32)vmem_read_card((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
                     case TOK_WORD_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, (os_int32)vmem_read_word((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
                     case TOK_LONG_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, vmem_read_long((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
                     case TOK_SINGLE:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_float(rt, (double)vmem_read_single((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
                     case TOK_DOUBLE_TOK:
                         if (rt->sp >= 1) {
                             arg1 = gfa_value_pop(rt);
                             if (arg1) {
-                                gfa_value_push_long(rt, 0);
+                                gfa_value_push_float(rt, vmem_read_double((os_int32)gfa_value_to_long(arg1)));
                                 if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                                 os_mem_free(arg1);
-                            } else {
-                                gfa_value_push_long(rt, 0);
                             }
-                        } else {
-                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* PEEK / DPEEK / LPEEK en forme fonction (PEEK(addr)) */
+                    case TOK_PEEK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, (os_int32)vmem_read_byte((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
+                    case TOK_DPEEK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, (os_int32)vmem_read_card((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
+                        }
+                        break;
+                    case TOK_LPEEK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1) {
+                                gfa_value_push_long(rt, vmem_read_long((os_int32)gfa_value_to_long(arg1)));
+                                if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
+                                os_mem_free(arg1);
+                            }
                         }
                         break;
 
                     /* HIMEM / FRE() - memoire */
                     case TOK_HIMEM:
-                        /* HIMEM retourne l'adresse haute memoire */
-                        gfa_value_push_long(rt, (os_int32)(16 * 1024 * 1024));
+                        /* HIMEM - taille de la region memoire emulee */
+                        gfa_value_push_long(rt, vmem_size());
                         break;
                     case TOK_FRE:
                         /* FRE() - stub: toujours retourne 256 Mo.
@@ -2143,7 +2656,8 @@ static int execute_instruction(gfa_runtime *rt)
                             arg1 = gfa_value_pop(rt);
                             if (arg1) {
                                 const char *name = (arg1->type == GFA_VAL_STRING && arg1->data.s) ? arg1->data.s : "";
-                                result_l = (os_int32)os_fs_exist(name);
+                                /* GFA : TRUE(-1) / FALSE(0) */
+                                result_l = (os_int32)gfa_exist(name);
                                 gfa_value_push_long(rt, result_l);
                                 if (arg1->owns_string && arg1->data.s) os_mem_free(arg1->data.s);
                                 os_mem_free(arg1);
@@ -2211,10 +2725,619 @@ static int execute_instruction(gfa_runtime *rt)
                         gfa_value_push_long(rt, 0);
                         break;
 
+                    /* --- Fonctions fichiers (canal en argument) --- */
+                    case TOK_EOF_TOK:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfa_eof(
+                                (int)gfa_value_to_long(arg1));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_LOF:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfa_lof(
+                                (int)gfa_value_to_long(arg1));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_LOC:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfa_loc(
+                                (int)gfa_value_to_long(arg1));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* --- Instructions fichiers (statement) --- */
+                    case TOK_KILL:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                gfa_kill(arg1->data.s);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_NAME:   /* NAME "a" AS "b" : pile [ancien][nouveau] */
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s &&
+                                arg2 && arg2->type == GFA_VAL_STRING &&
+                                arg2->data.s) {
+                                gfa_name_file(arg1->data.s, arg2->data.s);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_MKDIR:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                os_dir_mkdir(arg1->data.s);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_RMDIR:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                os_dir_rmdir(arg1->data.s);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_CHDIR:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                os_dir_chdir(arg1->data.s);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_CHDRIVE:
+                        /* Pas de changement de lecteur sur l'hote */
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_FILES:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                os_file_info fi;
+                                if (os_dir_first(arg1->data.s, 0, &fi)) {
+                                    do {
+                                        os_con_output_string(fi.name);
+                                        os_con_output_string("\n");
+                                    } while (os_dir_next(&fi));
+                                }
+                            }
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_FGETDTA:
+                    case TOK_FSETDTA:
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_SEEK:
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfa_seek(
+                                (int)gfa_value_to_long(arg1),
+                                (long)gfa_value_to_long(arg2));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_RELSEEK:
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfa_relseek(
+                                (int)gfa_value_to_long(arg1),
+                                (long)gfa_value_to_long(arg2));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_FIELD:
+                        /* FIELD #n, len AS var$ : pile [var$][len][chan] */
+                        if (rt->sp >= 3) {
+                            char *fname;
+                            arg3 = gfa_value_pop(rt);  /* var$ */
+                            arg2 = gfa_value_pop(rt);  /* len  */
+                            arg1 = gfa_value_pop(rt);  /* chan */
+                            fname = (arg3 && arg3->type == GFA_VAL_STRING &&
+                                     arg3->data.s) ? arg3->data.s : NULL;
+                            if (fname != NULL) {
+                                int fr, bsz;
+                                char *buf;
+                                gfa_variable *fv;
+                                fr = gfa_field((int)gfa_value_to_long(arg1),
+                                               (int)gfa_value_to_long(arg2),
+                                               fname);
+                                if (fr == 0) {
+                                    buf = gfa_field_buffer(
+                                        (int)gfa_value_to_long(arg1),
+                                        &bsz);
+                                    fv = gfa_var_lookup(rt->globals, fname);
+                                    if (buf != NULL && fv != NULL &&
+                                        fv->type == GFA_VAR_STRING &&
+                                        bsz > 0) {
+                                        char tmp[256];
+                                        int ci;
+                                        for (ci = 0; ci < bsz && ci < 255;
+                                             ci++) {
+                                            if (buf[ci] == '\0') break;
+                                            tmp[ci] = buf[ci];
+                                        }
+                                        tmp[ci] = '\0';
+                                        /* Supprimer les fins de ligne
+                                           eventuelles (ecrites par
+                                           PRINT #). */
+                                        if (ci > 0 && tmp[ci - 1] == '\n')
+                                            tmp[--ci] = '\0';
+                                        if (ci > 0 && tmp[ci - 1] == '\r')
+                                            tmp[--ci] = '\0';
+                                        gfa_var_set_from_string(fv, tmp);
+                                    }
+                                }
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                            if (arg3) os_mem_free(arg3);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_LSET:
+                    case TOK_RSET:
+                        /* LSET/RSET var$ = expr : assignation simple
+                           (geree par le parser). Neant ici. */
+                        while (rt->sp > 0) gfa_value_discard(rt, 1);
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_GET:
+                        /* GET #n[, pos] : lit un enregistrement dans le
+                           buffer du canal (random ou sequentiel). */
+                        {
+                            long gpos = -1;
+                            if (argc_call >= 2) {
+                                arg2 = gfa_value_pop(rt);
+                                gpos = (long)gfa_value_to_long(arg2);
+                                if (arg2) os_mem_free(arg2);
+                            }
+                            if (rt->sp >= 1) {
+                                arg1 = gfa_value_pop(rt);
+                                result_l = (os_int32)gfa_get_channel(
+                                    (int)gfa_value_to_long(arg1), gpos);
+                                gfa_value_push_long(rt, result_l);
+                                if (arg1) os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_long(rt, -1);
+                            }
+                        }
+                        break;
+                    case TOK_PUT:
+                        /* PUT #n[, pos] : ecrit le buffer du canal. */
+                        {
+                            long ppos = -1;
+                            if (argc_call >= 2) {
+                                arg2 = gfa_value_pop(rt);
+                                ppos = (long)gfa_value_to_long(arg2);
+                                if (arg2) os_mem_free(arg2);
+                            }
+                            if (rt->sp >= 1) {
+                                arg1 = gfa_value_pop(rt);
+                                result_l = (os_int32)gfa_put_channel(
+                                    (int)gfa_value_to_long(arg1), ppos);
+                                gfa_value_push_long(rt, result_l);
+                                if (arg1) os_mem_free(arg1);
+                            } else {
+                                gfa_value_push_long(rt, -1);
+                            }
+                        }
+                        break;
+                    case TOK_SGET:
+                        /* SGET #n : lit un octet dans la variable courante */
+                        if (rt->sp >= 1) {
+                            int ch_byte;
+                            arg1 = gfa_value_pop(rt);
+                            ch_byte = gfa_sget(
+                                (int)gfa_value_to_long(arg1));
+                            if (ch_byte >= 0 && rt->last_var != NULL &&
+                                rt->last_var->type == GFA_VAR_FLOAT) {
+                                rt->last_var->value.float_val =
+                                    (double)ch_byte;
+                            }
+                            gfa_value_push_long(rt, (os_int32)ch_byte);
+                            if (arg1) os_mem_free(arg1);
+                        } else {
+                            gfa_value_push_long(rt, -1);
+                        }
+                        break;
+                    case TOK_SPUT:
+                        /* SPUT #n, val : ecrit un octet */
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            gfa_sput((int)gfa_value_to_long(arg1),
+                                     (int)gfa_value_to_long(arg2));
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- Memoire dynamique (vmem) --- */
+                    case TOK_MALLOC:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            result_l = vmem_malloc(
+                                (os_int32)gfa_value_to_long(arg1));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_MFREE:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            vmem_free((os_int32)gfa_value_to_long(arg1));
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_BMOVE:
+                        /* BMOVE dst, src, len */
+                        if (rt->sp >= 3) {
+                            arg3 = gfa_value_pop(rt);
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            vmem_copy((os_int32)gfa_value_to_long(arg1),
+                                      (os_int32)gfa_value_to_long(arg2),
+                                      (os_int32)gfa_value_to_long(arg3));
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                            if (arg3) os_mem_free(arg3);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- Console : position curseur --- */
+                    case TOK_POS:
+                        gfa_value_push_long(rt,
+                            (os_int32)os_con_cursor_get_x());
+                        break;
+                    case TOK_CRSCOL:
+                        gfa_value_push_long(rt,
+                            (os_int32)os_con_cursor_get_x());
+                        break;
+                    case TOK_CRSLIN:
+                        gfa_value_push_long(rt,
+                            (os_int32)os_con_cursor_get_y());
+                        break;
+                    case TOK_VTAB:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            os_con_cursor_goto(1,
+                                (int)gfa_value_to_long(arg1));
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_HTAB:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            os_con_cursor_goto(
+                                (int)gfa_value_to_long(arg1),
+                                os_con_cursor_get_y());
+                            if (arg1) os_mem_free(arg1);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- Ports I/O --- */
+                    case TOK_INP:
+                        if (rt->sp >= 1) {
+                            int port;
+                            arg1 = gfa_value_pop(rt);
+                            port = (int)gfa_value_to_long(arg1);
+                            if (arg1) os_mem_free(arg1);
+                            if (port == 28) {
+                                int ch = os_con_input_key();
+                                gfa_value_push_long(rt,
+                                    (os_int32)(ch >= 0 ? ch : 0));
+                            } else {
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_OUT:
+                        /* OUT? port, val */
+                        if (rt->sp >= 2) {
+                            int port;
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            port = (int)gfa_value_to_long(arg1);
+                            if (port == 28) {
+                                os_con_output_char(
+                                    (int)gfa_value_to_long(arg2));
+                            } else if (port >= 0 && port <= 3) {
+                                /* ports son : ignore (voir SOUND) */
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- UCASE$ (alias UPPER$) --- */
+                    case TOK_UCASE:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                result_s = gfa_upper(arg1->data.s);
+                                if (result_s)
+                                    gfa_value_push_string(rt, result_s, 1);
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (!result_s) gfa_value_push_long(rt, 0);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* --- Tableaux de controle VDI/AES (adresses vmem) --- */
+                    case TOK_CONTRL:   /* = ADDRIN/ADDROUT (memes tokens) */
+                        gfa_value_push_long(rt, 0x1000);
+                        break;
+                    case TOK_INTIN:
+                        gfa_value_push_long(rt, 0x1200);
+                        break;
+                    case TOK_INTOUT:
+                        gfa_value_push_long(rt, 0x1280);
+                        break;
+                    case TOK_PTSIN:
+                        gfa_value_push_long(rt, 0x1300);
+                        break;
+                    case TOK_PTSOUT:
+                        gfa_value_push_long(rt, 0x1380);
+                        break;
+                    case TOK_GINTIN:
+                        gfa_value_push_long(rt, 0x1400);
+                        break;
+                    case TOK_GINTOUT:
+                        gfa_value_push_long(rt, 0x1480);
+                        break;
+                    case TOK_WORK_OUT:
+                        gfa_value_push_long(rt, 0x1500);
+                        break;
+
+                    /* --- POINT / PTST : lecture pixel --- */
+                    case TOK_POINT:
+                    case TOK_PTST:
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);
+                            arg1 = gfa_value_pop(rt);
+                            result_l = (os_int32)gfx_get_pixel(
+                                (int)gfa_value_to_long(arg1),
+                                (int)gfa_value_to_long(arg2));
+                            gfa_value_push_long(rt, result_l);
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* --- INSERT(a$, b$) : insertion de b$ au centre de a$ --- */
+                    case TOK_INSERT:
+                        if (rt->sp >= 2) {
+                            arg2 = gfa_value_pop(rt);  /* b$ */
+                            arg1 = gfa_value_pop(rt);  /* a$ */
+                            {
+                                const char *sa = (arg1 &&
+                                    arg1->type == GFA_VAL_STRING &&
+                                    arg1->data.s) ? arg1->data.s : "";
+                                const char *sb = (arg2 &&
+                                    arg2->type == GFA_VAL_STRING &&
+                                    arg2->data.s) ? arg2->data.s : "";
+                                int la = (int)strlen(sa);
+                                int lb = (int)strlen(sb);
+                                int mid = la / 2;
+                                int il;
+                                result_s = (char *)os_mem_alloc(
+                                    (size_t)(la + lb) + 1);
+                                if (result_s != NULL) {
+                                    for (il = 0; il < mid; il++)
+                                        result_s[il] = sa[il];
+                                    memcpy(result_s + mid, sb, (size_t)lb);
+                                    memcpy(result_s + mid + lb, sa + mid,
+                                           (size_t)(la - mid));
+                                    result_s[la + lb] = '\0';
+                                }
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (arg2) os_mem_free(arg2);
+                            if (result_s) {
+                                gfa_value_push_string(rt, result_s, 1);
+                            } else {
+                                gfa_value_push_long(rt, 0);
+                            }
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+
+                    /* --- Shell (emulation hote) --- */
+                    case TOK_SHEL_ENVRN:
+                        if (rt->sp >= 1) {
+                            arg1 = gfa_value_pop(rt);
+                            if (arg1 && arg1->type == GFA_VAL_STRING &&
+                                arg1->data.s) {
+                                const char *env = os_get_env(arg1->data.s);
+                                if (env != NULL) {
+                                    result_s = gfa_str_new(env);
+                                    if (result_s)
+                                        gfa_value_push_string(rt, result_s, 1);
+                                }
+                            }
+                            if (arg1) os_mem_free(arg1);
+                            if (!result_s) gfa_value_push_long(rt, 0);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_SHEL_FIND:
+                        gfa_value_push_long(rt, 1); /* le shell hote existe */
+                        break;
+                    case TOK_SHEL_READ:
+                    case TOK_SHEL_WRITE:
+                    case TOK_SHEL_GET:
+                    case TOK_SHEL_PUT:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- WAVE : son avec enveloppe (hote) --- */
+                    case TOK_WAVE:
+                        /* WAVE ch, env, forme, periode, duree, freq */
+                        if (rt->sp >= 6) {
+                            arg3 = gfa_value_pop(rt);   /* freq   */
+                            {
+                                gfa_value *dv = gfa_value_pop(rt);  /* duree  */
+                                gfa_value *pv = gfa_value_pop(rt);  /* periode*/
+                                gfa_value *fv = gfa_value_pop(rt);  /* forme  */
+                                gfa_value *ev = gfa_value_pop(rt);  /* env    */
+                                gfa_value *cv = gfa_value_pop(rt);  /* canal  */
+                                (void)pv; (void)fv;
+                                gfa_sound(
+                                    cv ? (int)gfa_value_to_long(cv) : 0,
+                                    arg3 ? (int)gfa_value_to_long(arg3) : 0,
+                                    dv ? (int)(gfa_value_to_float(dv) * 1000.0) : 0,
+                                    50,
+                                    ev ? (int)gfa_value_to_long(ev) : 0);
+                                if (dv) os_mem_free(dv);
+                                if (pv) os_mem_free(pv);
+                                if (fv) os_mem_free(fv);
+                                if (ev) os_mem_free(ev);
+                                if (cv) os_mem_free(cv);
+                            }
+                            if (arg3) os_mem_free(arg3);
+                        }
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- GEMSYS / VDISYS : appels generiques (stubs hote) --- */
+                    case TOK_GEMSYS:
+                    case TOK_VDISYS:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* --- Stubs AES sans peripherique (retournent 0) --- */
+                    case TOK_APPL_FIND:
+                    case TOK_APPL_READ:
+                    case TOK_APPL_WRITE:
+                    case TOK_APPL_TPLAY:
+                    case TOK_APPL_TRECORD:
+                    case TOK_FORM_BUTTON:
+                    case TOK_FORM_CENTER:
+                    case TOK_FORM_DIAL:
+                    case TOK_FORM_DO:
+                    case TOK_FORM_ERROR:
+                    case TOK_FORM_KEYBD:
+                    case TOK_FORM_INPUT:
+                    case TOK_MENU:
+                    case TOK_MENU_KILL:
+                    case TOK_MENU_OFF:
+                    case TOK_MENU_ICHECK:
+                    case TOK_MENU_IENABLE:
+                    case TOK_MENU_REGISTER:
+                    case TOK_MENU_TEXT:
+                    case TOK_MENU_TNORMAL:
+                    case TOK_WIND_DELETE:
+                    case TOK_WIND_FIND:
+                    case TOK_WIND_CREATE:
+                    case TOK_WIND_CALC:
+                    case TOK_WIND_GET:
+                    case TOK_WIND_SET:
+                    case TOK_WIND_UPDATE:
+                    case TOK_EVNT_MULTI:
+                    case TOK_EVNT_MESAG:
+                    case TOK_EVNT_BUTTON:
+                    case TOK_EVNT_TIMER:
+                    case TOK_EVNT_DCLICK:
+                    case TOK_RSRC_LOAD:
+                    case TOK_RSRC_FREE:
+                    case TOK_RSRC_GADDR:
+                    case TOK_RSRC_SADDR:
+                    case TOK_RSRC_OBFIX:
+                    case TOK_RCALL:
+                    case TOK_RC_COPY:
+                    case TOK_RC_INTERSECT:
+                    case TOK_OBJC_ADD:
+                    case TOK_OBJC_CHANGE:
+                    case TOK_OBJC_DRAW:
+                    case TOK_OBJC_DELETE:
+                    case TOK_OBJC_ADDMOVE:
+                    case TOK_OBJC_MOVE:
+                    case TOK_OBJC_FIND:
+                    case TOK_OBJC_OFFSET:
+                    case TOK_OBJC_PICK:
+                    case TOK_OBJC_STATE:
+                    case TOK_OBJC_EDIT:
+                        gfa_value_push_long(rt, 0);
+                        break;
+
                     /* Non implemente */
                     default:
                         gfa_value_push_long(rt, 0);
                         break;
+                }
+
+                /* Garantie : le built-in a consomme exactement argc_call
+                   arguments et laisse exactement UN resultat sur la pile
+                   (certains cas ne popent pas leurs args ou ne pushent rien). */
+                if (inst->has_operand2) {
+                    expected_sp = sp_before - argc_call + 1;
+                    while (rt->sp > expected_sp) gfa_value_discard(rt, 1);
+                    if (rt->sp < expected_sp) gfa_value_push_long(rt, 0);
                 }
             }
             break;
@@ -2319,16 +3442,19 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_BLOAD:
-            /* Stack: [filename$] [addr] ; load file into buffer */
+            /* Pile: [filename$] [addr] ; charge le fichier en memoire
+               virtuelle a l'adresse donnee (defaut 32768 = $8000). */
             if (rt->sp >= 2) {
                 gfa_value *ad;
                 gfa_value *fn;
                 static char bload_buf[65536];
                 os_file_handle fh;
-                os_int32 size, nread;
+                os_int32 size, nread, addr, i;
                 ad = gfa_value_pop(rt);
                 fn = gfa_value_pop(rt);
-                if (fn && fn->type == GFA_VAL_STRING && fn->data.s) {
+                addr = (os_int32)gfa_value_to_long(ad);
+                if (addr == 0) addr = 32768;
+                if (fn != NULL && fn->type == GFA_VAL_STRING && fn->data.s) {
                     fh = os_file_open(fn->data.s, 'I', 0);
                     if (fh != NULL) {
                         size = os_file_size(fh);
@@ -2336,6 +3462,16 @@ static int execute_instruction(gfa_runtime *rt)
                         if (size < 0) size = 0;
                         nread = os_file_read(fh, bload_buf, size);
                         os_file_close(fh);
+                        if (nread < 0) nread = 0;
+                        if (vmem_addr_valid(addr)) {
+                            os_int32 vsize = vmem_size();
+                            if (addr + nread > vsize) nread = vsize - addr;
+                            for (i = 0; i < nread; i++)
+                                vmem_write_byte((os_int32)(addr + i),
+                                                (unsigned char)bload_buf[i]);
+                        } else {
+                            nread = 0;
+                        }
                         gfa_value_push_long(rt, nread);
                     } else {
                         gfa_value_push_long(rt, -1);
@@ -2349,29 +3485,41 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_BSAVE:
-            /* Stack: [filename$] [start] [end] ; save buffer to file */
+            /* Pile: [filename$] [debut] [fin] ; sauve la memoire
+               virtuelle [debut..fin[ dans le fichier. */
             if (rt->sp >= 3) {
                 gfa_value *en;
                 gfa_value *st;
                 gfa_value *fn;
                 static char bsave_buf[65536];
                 os_file_handle fh;
-                os_int32 start, end, len, written;
+                os_int32 start, end, len, written, i;
                 en = gfa_value_pop(rt);
                 st = gfa_value_pop(rt);
                 fn = gfa_value_pop(rt);
-                if (fn && st && en && fn->type == GFA_VAL_STRING && fn->data.s) {
+                if (fn != NULL && st != NULL && en != NULL &&
+                    fn->type == GFA_VAL_STRING && fn->data.s) {
                     start = (os_int32)gfa_value_to_long(st);
                     end   = (os_int32)gfa_value_to_long(en);
                     if (end < start) { os_int32 tmp = start; start = end; end = tmp; }
                     len = end - start;
                     if (len > 65536) len = 65536;
+                    if (vmem_addr_valid(start)) {
+                        os_int32 vsize = vmem_size();
+                        if (start + len > vsize) len = vsize - start;
+                        for (i = 0; i < len; i++)
+                            bsave_buf[i] =
+                                (char)vmem_read_byte((os_int32)(start + i));
+                    } else {
+                        len = 0;
+                    }
                     fh = os_file_open(fn->data.s, 'O', 0);
                     if (fh != NULL && len > 0) {
-                        written = os_file_write(fh, bsave_buf + start, len);
+                        written = os_file_write(fh, bsave_buf, len);
                         os_file_close(fh);
                         gfa_value_push_long(rt, (os_int32)written);
                     } else {
+                        if (fh) os_file_close(fh);
                         gfa_value_push_long(rt, -1);
                     }
                 } else {
@@ -2384,19 +3532,28 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_BGET:
-            /* Stack: [channel] [addr] [count] ; read file -> buffer */
+            /* Pile: [canal] [addr] [count] ; peripherique -> vmem */
             if (rt->sp >= 3) {
                 gfa_value *co, *ad, *ch;
                 int chan, count, n;
                 static char bget_buf[4096];
+                os_int32 addr, i;
                 co = gfa_value_pop(rt);
                 ad = gfa_value_pop(rt);
                 ch = gfa_value_pop(rt);
-                if (ch && ad && co) {
+                if (ch != NULL && ad != NULL && co != NULL) {
                     chan  = (int)gfa_value_to_long(ch);
                     count = (int)gfa_value_to_long(co);
+                    addr  = (os_int32)gfa_value_to_long(ad);
                     if (count > 4096) count = 4096;
                     n = gfa_bget(chan, bget_buf, count);
+                    if (n > 0 && vmem_addr_valid(addr)) {
+                        os_int32 vsize = vmem_size();
+                        if (addr + n > vsize) n = vsize - addr;
+                        for (i = 0; i < n; i++)
+                            vmem_write_byte((os_int32)(addr + i),
+                                            (unsigned char)bget_buf[i]);
+                    }
                     gfa_value_push_long(rt, (os_int32)n);
                 } else {
                     gfa_value_push_long(rt, (os_int32)-1);
@@ -2408,19 +3565,30 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_BPUT:
-            /* Stack: [channel] [addr] [count] ; write buffer -> file */
+            /* Pile: [canal] [addr] [count] ; vmem -> peripherique */
             if (rt->sp >= 3) {
                 gfa_value *co, *ad, *ch;
                 int chan, count, n;
                 static char bput_buf[4096];
+                os_int32 addr, i;
                 co = gfa_value_pop(rt);
                 ad = gfa_value_pop(rt);
                 ch = gfa_value_pop(rt);
-                if (ch && ad && co) {
+                if (ch != NULL && ad != NULL && co != NULL) {
                     chan  = (int)gfa_value_to_long(ch);
                     count = (int)gfa_value_to_long(co);
+                    addr  = (os_int32)gfa_value_to_long(ad);
                     if (count > 4096) count = 4096;
-                    n = gfa_bput(chan, bput_buf, count);
+                    if (vmem_addr_valid(addr)) {
+                        os_int32 vsize = vmem_size();
+                        if (addr + count > vsize) count = vsize - addr;
+                        for (i = 0; i < count; i++)
+                            bput_buf[i] =
+                                (char)vmem_read_byte((os_int32)(addr + i));
+                        n = gfa_bput(chan, bput_buf, count);
+                    } else {
+                        n = -1;
+                    }
                     gfa_value_push_long(rt, (os_int32)n);
                 } else {
                     gfa_value_push_long(rt, (os_int32)-1);
@@ -2504,16 +3672,19 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_COLOR:
-            /* COLOR fg [, bg] : args on stack */
+            /* COLOR fg [, bg] : pile [fg][bg] (bg en haut) */
             if (rt->sp >= 1) {
                 int fg, bg;
                 v2 = NULL;
-                v1 = gfa_value_pop(rt);
+                v1 = NULL;
+                if (rt->sp >= 2) {
+                    v2 = gfa_value_pop(rt);  /* bg */
+                    v1 = gfa_value_pop(rt);  /* fg */
+                } else {
+                    v1 = gfa_value_pop(rt);  /* fg seul */
+                }
                 fg = v1 ? (int)gfa_value_to_long(v1) : 1;
-                if (rt->sp > 0) {
-                    v2 = gfa_value_pop(rt);
-                    bg = v2 ? (int)gfa_value_to_long(v2) : 0;
-                } else bg = 0;
+                bg = v2 ? (int)gfa_value_to_long(v2) : 0;
                 gfx_color(fg, bg);
                 gfx_update();
                 rt->current_color = fg;
@@ -2579,6 +3750,29 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        case OP_WINDOW_GFX:
+            /* WINDOW (x0,y0), (x1,y1) : pile [x0][y0][x1][y1] */
+            {
+                gfa_value *wv1, *wv2, *wv3, *wv4;
+                wv1 = wv2 = wv3 = wv4 = NULL;
+                if (rt->sp >= 4) {
+                    wv4 = gfa_value_pop(rt);
+                    wv3 = gfa_value_pop(rt);
+                    wv2 = gfa_value_pop(rt);
+                    wv1 = gfa_value_pop(rt);
+                    gfx_window((int)gfa_value_to_long(wv1),
+                               (int)gfa_value_to_long(wv2),
+                               (int)gfa_value_to_long(wv3),
+                               (int)gfa_value_to_long(wv4));
+                    gfx_update();
+                }
+                if (wv1) os_mem_free(wv1);
+                if (wv2) os_mem_free(wv2);
+                if (wv3) os_mem_free(wv3);
+                if (wv4) os_mem_free(wv4);
+            }
+            break;
+
         case OP_SOUND:
             /* SOUND ch, freq, dur, vol, env */
             {
@@ -2633,6 +3827,26 @@ static int execute_instruction(gfa_runtime *rt)
                 }
                 line[i] = '\0';
                 gfa_var_set_from_string(var, line);
+            }
+            break;
+
+        case OP_LINE_INPUT_FILE:
+            /* Pile: [canal] ; lit une ligne depuis le canal fichier. */
+            {
+                gfa_variable *vv = (gfa_variable *)inst->operand.ptr_val;
+                char *ln;
+                if (vv != NULL && rt->sp >= 1) {
+                    gfa_value *cv = gfa_value_pop(rt);
+                    int ch = (int)gfa_value_to_long(cv);
+                    if (cv) os_mem_free(cv);
+                    ln = gfa_line_input_channel(ch);
+                    if (ln != NULL) {
+                        gfa_var_set_from_string(vv, ln);
+                        os_mem_free(ln);
+                    }
+                } else {
+                    while (rt->sp > 0) gfa_value_discard(rt, 1);
+                }
             }
             break;
 
@@ -2699,45 +3913,115 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_PEEK:
-            if (rt->sp >= 1) { v1 = gfa_value_pop(rt); if (v1) { gfa_value_push_long(rt, gfa_value_to_long(v1)); os_mem_free(v1); } }
+            if (rt->sp >= 1) {
+                v1 = gfa_value_pop(rt);
+                if (v1) {
+                    gfa_value_push_long(rt, (os_int32)vmem_read_byte((os_int32)gfa_value_to_long(v1)));
+                    os_mem_free(v1);
+                }
+            }
             break;
 
         case OP_POKE:
-            /* STUB: POKE addr, byte - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            /* PEEK/POKE emule la memoire physique ST via vmem (big-endian). */
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt); /* valeur (top) */
+                v1 = gfa_value_pop(rt); /* adresse */
+                if (v1 && v2) {
+                    vmem_write_byte((os_int32)gfa_value_to_long(v1),
+                                    (unsigned char)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_DPEEK:
-            if (rt->sp >= 1) { v1 = gfa_value_pop(rt); if (v1) { gfa_value_push_long(rt, gfa_value_to_long(v1)); os_mem_free(v1); } }
+            if (rt->sp >= 1) {
+                v1 = gfa_value_pop(rt);
+                if (v1) {
+                    gfa_value_push_long(rt, (os_int32)vmem_read_card((os_int32)gfa_value_to_long(v1)));
+                    os_mem_free(v1);
+                }
+            }
             break;
 
         case OP_DPOKE:
-            /* STUB: DPOKE addr, word - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    vmem_write_word((os_int32)gfa_value_to_long(v1),
+                                    (unsigned short)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_LPEEK:
-            if (rt->sp >= 1) { v1 = gfa_value_pop(rt); if (v1) { gfa_value_push_long(rt, gfa_value_to_long(v1)); os_mem_free(v1); } }
+            if (rt->sp >= 1) {
+                v1 = gfa_value_pop(rt);
+                if (v1) {
+                    gfa_value_push_long(rt, vmem_read_long((os_int32)gfa_value_to_long(v1)));
+                    os_mem_free(v1);
+                }
+            }
             break;
 
         case OP_LPOKE:
-            /* STUB: LPOKE addr, long - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    vmem_write_long((os_int32)gfa_value_to_long(v1),
+                                    (os_int32)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_SPOKE:
-            /* STUB: SPOKE addr, byte - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            /* SPOKE = POKE (variante GFA) */
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    vmem_write_byte((os_int32)gfa_value_to_long(v1),
+                                    (unsigned char)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_SDPOKE:
-            /* STUB: SDPOKE addr, word - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            /* SDPOKE = DPOKE (variante GFA) */
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    vmem_write_word((os_int32)gfa_value_to_long(v1),
+                                    (unsigned short)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_SLPOKE:
-            /* STUB: SLPOKE addr, long - memory write not yet implemented */
-            if (rt->sp >= 2) { v2 = gfa_value_pop(rt); v1 = gfa_value_pop(rt); if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); } if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); } }
+            /* SLPOKE = LPOKE (variante GFA) */
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                if (v1 && v2) {
+                    vmem_write_long((os_int32)gfa_value_to_long(v1),
+                                    (os_int32)gfa_value_to_long(v2));
+                }
+                if (v1) { if (v1->owns_string && v1->data.s) os_mem_free(v1->data.s); os_mem_free(v1); }
+                if (v2) { if (v2->owns_string && v2->data.s) os_mem_free(v2->data.s); os_mem_free(v2); }
+            }
             break;
 
         case OP_ON_ERROR:
@@ -2899,6 +4183,639 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        /* ---------------------------------------------------------- */
+        /* Tableaux : ERASE / CLEAR / tri / INSERT / DELETE           */
+        /* ---------------------------------------------------------- */
+
+        case OP_ERASE_VAR:
+            {
+                gfa_variable *ev = (gfa_variable *)inst->operand.ptr_val;
+                if (ev != NULL && ev->type == GFA_VAR_ARRAY) {
+                    if (ev->value.arr.data != NULL) {
+                        os_mem_free(ev->value.arr.data);
+                        ev->value.arr.data = NULL;
+                    }
+                    if (ev->value.arr.dim_sizes != NULL) {
+                        os_mem_free(ev->value.arr.dim_sizes);
+                        ev->value.arr.dim_sizes = NULL;
+                    }
+                    ev->value.arr.num_dims = 0;
+                    ev->value.arr.total_elements = 0;
+                    ev->value.arr.is_matrix = 0;
+                }
+            }
+            break;
+
+        case OP_CLEAR_ALL:
+            {
+                int bi, bj;
+                /* Reset des valeurs en place (les pointeurs du codegen
+                   restent valides). */
+                for (bi = 0; bi < rt->globals->num_buckets; bi++) {
+                    gfa_variable *gv = rt->globals->buckets[bi];
+                    for (bj = 0; gv != NULL && bj < 4096; bj++, gv = gv->next) {
+                        if (gv->is_reserved) continue;
+                        switch (gv->type) {
+                            case GFA_VAR_BOOL:  gv->value.bool_val = 0; break;
+                            case GFA_VAR_BYTE:  gv->value.byte_val = 0; break;
+                            case GFA_VAR_WORD:  gv->value.word_val = 0; break;
+                            case GFA_VAR_LONG:  gv->value.long_val = 0; break;
+                            case GFA_VAR_FLOAT: gv->value.float_val = 0.0; break;
+                            case GFA_VAR_STRING:
+                                if (gv->value.str.data != NULL) {
+                                    gv->value.str.data[0] = '\0';
+                                    gv->value.str.length = 0;
+                                }
+                                break;
+                            case GFA_VAR_ARRAY:
+                                if (gv->value.arr.data != NULL)
+                                    os_mem_set(gv->value.arr.data, 0,
+                                        (size_t)gv->value.arr.total_elements *
+                                        (size_t)gv->value.arr.element_size);
+                                break;
+                            default: break;
+                        }
+                    }
+                }
+                rt->data_ptr = 0; /* CLEAR reinitialise aussi DATA */
+            }
+            break;
+
+        case OP_QSORT:
+        case OP_SSORT:
+            {
+                gfa_variable *qv = (gfa_variable *)inst->operand.ptr_val;
+                if (qv != NULL && qv->type == GFA_VAR_ARRAY &&
+                    qv->value.arr.data != NULL && rt->sp >= 2) {
+                    gfa_value *hv = gfa_value_pop(rt);
+                    gfa_value *lv = gfa_value_pop(rt);
+                    int lo, hi, total;
+                    double *arr;
+                    lo = (int)gfa_value_to_long(lv);
+                    hi = (int)gfa_value_to_long(hv);
+                    if (lv) os_mem_free(lv);
+                    if (hv) os_mem_free(hv);
+                    total = (int)qv->value.arr.total_elements;
+                    if (lo < 0) lo = 0;
+                    if (hi >= total) hi = total - 1;
+                    arr = (double *)qv->value.arr.data;
+                    if (lo < hi && arr != NULL) {
+                        if (inst->opcode == OP_QSORT)
+                            gfa_array_quicksort(arr, lo, hi);
+                        else
+                            gfa_array_shellsort(arr, lo, hi);
+                    }
+                } else {
+                    while (rt->sp > 0) gfa_value_discard(rt, 1);
+                }
+            }
+            break;
+
+        case OP_INSERT_ELEM:
+            {
+                gfa_variable *iv = (gfa_variable *)inst->operand.ptr_val;
+                if (iv != NULL && iv->type == GFA_VAR_ARRAY &&
+                    iv->value.arr.data != NULL && rt->sp >= 2) {
+                    gfa_value *vv = gfa_value_pop(rt);
+                    gfa_value *xv = gfa_value_pop(rt);
+                    int idx, total, i2;
+                    double *arr;
+                    idx = (int)gfa_value_to_long(xv);
+                    if (xv) os_mem_free(xv);
+                    if (vv) os_mem_free(vv);
+                    total = (int)iv->value.arr.total_elements;
+                    arr = (double *)iv->value.arr.data;
+                    if (idx >= 0 && idx < total && vv != NULL) {
+                        for (i2 = total - 1; i2 > idx; i2--)
+                            arr[i2] = arr[i2 - 1];
+                        arr[idx] = gfa_value_to_float(vv);
+                    }
+                } else {
+                    while (rt->sp > 0) gfa_value_discard(rt, 1);
+                }
+            }
+            break;
+
+        case OP_DELETE_ELEM:
+            {
+                gfa_variable *dv = (gfa_variable *)inst->operand.ptr_val;
+                if (dv != NULL && dv->type == GFA_VAR_ARRAY &&
+                    dv->value.arr.data != NULL && rt->sp >= 1) {
+                    gfa_value *xv = gfa_value_pop(rt);
+                    int idx, total, i2;
+                    double *arr;
+                    idx = (int)gfa_value_to_long(xv);
+                    if (xv) os_mem_free(xv);
+                    total = (int)dv->value.arr.total_elements;
+                    arr = (double *)dv->value.arr.data;
+                    if (idx >= 0 && idx < total) {
+                        for (i2 = idx; i2 < total - 1; i2++)
+                            arr[i2] = arr[i2 + 1];
+                        arr[total - 1] = 0.0;
+                    }
+                } else {
+                    while (rt->sp > 0) gfa_value_discard(rt, 1);
+                }
+            }
+            break;
+
+        /* ---------------------------------------------------------- */
+        /* Graphismes VDI etendus (ANSI)                              */
+        /* ---------------------------------------------------------- */
+
+        case OP_PLOT_GFX:
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                gfx_plot((int)gfa_value_to_long(v1),
+                         (int)gfa_value_to_long(v2));
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+                gfx_update();
+            }
+            break;
+
+        case OP_TEXT_GFX:
+            /* Stack: [x][y][texte$] */
+            if (rt->sp >= 3) {
+                v2 = gfa_value_pop(rt);
+                {
+                    gfa_value *vy = gfa_value_pop(rt);
+                    gfa_value *vx = gfa_value_pop(rt);
+                    if (v2 && v2->type == GFA_VAL_STRING && v2->data.s)
+                        gfx_text((int)gfa_value_to_long(vx),
+                                 (int)gfa_value_to_long(vy), v2->data.s);
+                    if (vx) os_mem_free(vx);
+                    if (vy) os_mem_free(vy);
+                }
+                if (v2) os_mem_free(v2);
+                gfx_update();
+            }
+            break;
+
+        case OP_POLY_GFX:
+            /* Stack: [n][xy0..xy2n-1] ; operand.int_val = 0 ligne,
+               1 polygone plein, 2 bezier, 3 marqueurs.
+               Si operand.ptr_val != NULL : les points sont lus dans
+               le tableau (POLYLINE n, xy&()). */
+            {
+                int n, i2;
+                static int pts[128];
+                gfa_variable *av;
+                int from_arr;
+                if (rt->sp >= 1) {
+                    v1 = gfa_value_pop(rt);  /* n */
+                    n = v1 ? (int)gfa_value_to_long(v1) : 0;
+                    if (v1) os_mem_free(v1);
+                    av = (gfa_variable *)inst->operand.ptr_val;
+                    from_arr = (av != NULL && av->type == GFA_VAR_ARRAY &&
+                                 av->value.arr.data != NULL);
+                    if (n > 0 && n <= 32) {
+                        if (from_arr) {
+                            int total;
+                            double *arr;
+                            total = (int)av->value.arr.total_elements;
+                            arr = (double *)av->value.arr.data;
+                            if (2 * n > total) n = total / 2;
+                            for (i2 = 0; i2 < 2 * n; i2++)
+                                pts[i2] = (int)arr[i2];
+                        } else if (rt->sp >= (2 * n)) {
+                            for (i2 = 2 * n - 1; i2 >= 0; i2--) {
+                                gfa_value *pv = gfa_value_pop(rt);
+                                pts[i2] = pv ? (int)gfa_value_to_long(pv)
+                                             : 0;
+                                if (pv) os_mem_free(pv);
+                            }
+                        } else {
+                            n = 0;
+                        }
+                        if (n > 0) {
+                            if (inst->operand.int_val == 1) {
+                                gfx_polygon(n, pts, 1);
+                            } else if (inst->operand.int_val == 2) {
+                                gfx_bezier(n, pts);
+                            } else if (inst->operand.int_val == 3) {
+                                for (i2 = 0; i2 < 2 * n; i2 += 2)
+                                    gfx_plot(pts[i2], pts[i2 + 1]);
+                            } else {
+                                gfx_polyline(n, pts);
+                            }
+                            gfx_update();
+                        }
+                    } else if (!from_arr) {
+                        while (rt->sp > 0) gfa_value_discard(rt, 1);
+                    }
+                }
+            }
+            break;
+
+        case OP_FILL_GFX:
+            /* Stack: [limite][y][x] */
+            if (rt->sp >= 3) {
+                int border;
+                v2 = gfa_value_pop(rt);   /* limite (ou -1) */
+                {
+                    gfa_value *vy = gfa_value_pop(rt);
+                    gfa_value *vx = gfa_value_pop(rt);
+                    border = (int)gfa_value_to_long(v2);
+                    gfx_flood_fill((int)gfa_value_to_long(vx),
+                                   (int)gfa_value_to_long(vy), border);
+                    if (vx) os_mem_free(vx);
+                    if (vy) os_mem_free(vy);
+                }
+                if (v2) os_mem_free(v2);
+                gfx_update();
+            }
+            break;
+
+        case OP_GETBIT_GFX:
+            /* Stack: [x2][y2][x1][y1][var$] : capture la zone */
+            if (rt->sp >= 5) {
+                int x1, y1, x2, y2, w, h;
+                static char capbuf[640 * 400];
+                v2 = gfa_value_pop(rt);   /* y2 */
+                {
+                    gfa_value *vx2 = gfa_value_pop(rt);  /* x2 */
+                    gfa_value *vy1 = gfa_value_pop(rt);  /* y1 */
+                    gfa_value *vx1 = gfa_value_pop(rt);  /* x1 */
+                    gfa_value *var = gfa_value_pop(rt);  /* var$ (nom) */
+                    x1 = (int)gfa_value_to_long(vx1);
+                    y1 = (int)gfa_value_to_long(vy1);
+                    x2 = (int)gfa_value_to_long(vx2);
+                    y2 = (int)gfa_value_to_long(v2);
+                    if (var && var->type == GFA_VAL_STRING && var->data.s) {
+                        gfa_variable *gv =
+                            gfa_var_lookup(rt->globals, var->data.s);
+                        if (gv != NULL && gv->type == GFA_VAR_STRING) {
+                            w = x2 - x1 + 1;
+                            h = y2 - y1 + 1;
+                            if (w < 1) w = 1;
+                            if (h < 1) h = 1;
+                            if (w * h > (int)sizeof(capbuf))
+                                w = (int)sizeof(capbuf) / h;
+                            gfx_capture(x1, y1, x1 + w - 1, y1 + h - 1,
+                                        capbuf);
+                            gfa_var_set_from_string(gv, capbuf);
+                            /* La chaine contient des pixels bruts :
+                               force longueur = nb de pixels */
+                            gv->value.str.length = (os_int32)(w * h);
+                            rt->capture_w = w;
+                            rt->capture_h = h;
+                        }
+                    }
+                    if (vx1) os_mem_free(vx1);
+                    if (vy1) os_mem_free(vy1);
+                    if (vx2) os_mem_free(vx2);
+                    if (var) os_mem_free(var);
+                }
+                if (v2) os_mem_free(v2);
+            }
+            break;
+
+        case OP_PUTBIT_GFX:
+            /* Stack: [y][x][var$] : restitue la derniere zone capturee */
+            if (rt->sp >= 3) {
+                int w, h, bl, i2;
+                static char capbuf[640 * 400];
+                v2 = gfa_value_pop(rt);   /* x */
+                {
+                    gfa_value *vx = gfa_value_pop(rt);  /* y */
+                    gfa_value *var = gfa_value_pop(rt); /* var$ */
+                    w = rt->capture_w;
+                    h = rt->capture_h;
+                    if (var && var->type == GFA_VAL_STRING && var->data.s &&
+                        w > 0 && h > 0) {
+                        gfa_variable *gv =
+                            gfa_var_lookup(rt->globals, var->data.s);
+                        if (gv != NULL && gv->type == GFA_VAR_STRING &&
+                            gv->value.str.data != NULL) {
+                            os_mem_set(capbuf, 0, (size_t)w * (size_t)h);
+                            bl = (int)gv->value.str.length;
+                            if (bl > w * h) bl = w * h;
+                            if (bl < 0) bl = 0;
+                            if (bl > 0)
+                                os_mem_copy(capbuf, gv->value.str.data,
+                                             (size_t)bl);
+                            gfx_restore((int)gfa_value_to_long(vx),
+                                       (int)gfa_value_to_long(v2),
+                                       capbuf, w, h);
+                            gfx_update();
+                        }
+                    }
+                    if (vx) os_mem_free(vx);
+                    if (var) os_mem_free(var);
+                }
+                if (v2) os_mem_free(v2);
+                (void)i2;
+            }
+            break;
+
+        case OP_SETCOLOR:
+            /* Stack: [val][n] : registre palette */
+            if (rt->sp >= 2) {
+                v2 = gfa_value_pop(rt);
+                v1 = gfa_value_pop(rt);
+                gfx_color_reg((int)gfa_value_to_long(v1),
+                              (int)gfa_value_to_long(v2));
+                if (v1) os_mem_free(v1);
+                if (v2) os_mem_free(v2);
+                gfx_update();
+            }
+            break;
+
+        case OP_MODE_GFX:
+            if (rt->sp >= 1) {
+                v1 = gfa_value_pop(rt);
+                gfx_mode((int)gfa_value_to_long(v1));
+                if (v1) os_mem_free(v1);
+            }
+            break;
+
+        case OP_CLIP_GFX:
+            /* Stack: [x2][y2][x1][y1] ; tous nuls : reset */
+            if (rt->sp >= 4) {
+                v2 = gfa_value_pop(rt);
+                {
+                    gfa_value *vy2 = gfa_value_pop(rt);
+                    gfa_value *vy1 = gfa_value_pop(rt);
+                    gfa_value *vx1 = gfa_value_pop(rt);
+                    int x1 = (int)gfa_value_to_long(vx1);
+                    int y1 = (int)gfa_value_to_long(vy1);
+                    int x2 = (int)gfa_value_to_long(vy2);
+                    int y2 = (int)gfa_value_to_long(v2);
+                    if (x1 == 0 && y1 == 0 && x2 == 0 && y2 == 0)
+                        gfx_clip_reset();
+                    else
+                        gfx_clip(x1, y1, x2, y2);
+                    if (vx1) os_mem_free(vx1);
+                    if (vy1) os_mem_free(vy1);
+                    if (vy2) os_mem_free(vy2);
+                }
+                if (v2) os_mem_free(v2);
+            }
+            break;
+
+        /* ---------------------------------------------------------- */
+        /* Fenetres GEM (emulation framebuffer)                       */
+        /* ---------------------------------------------------------- */
+
+        case OP_WINDOW_STMT:
+            {
+                int sub = inst->operand.int_val;
+                if (sub == 0) {  /* CLEARW n */
+                    if (rt->sp >= 1) gfa_value_pop(rt);
+                    gfx_clear();
+                    gfx_update();
+                } else if (sub == 1) {  /* TITLEW n, "t" */
+                    if (rt->sp >= 2) {
+                        v2 = gfa_value_pop(rt);
+                        v1 = gfa_value_pop(rt);
+                        if (v2 && v2->type == GFA_VAL_STRING && v2->data.s)
+                            gfx_text(2, 0, v2->data.s);
+                        if (v1) os_mem_free(v1);
+                        if (v2) os_mem_free(v2);
+                        gfx_update();
+                    } else {
+                        while (rt->sp > 0) gfa_value_discard(rt, 1);
+                    }
+                } else if (sub == 2 || sub == 4) {
+                    /* INFOW / MWOUT n, x, y, w, h : cadre */
+                    if (rt->sp >= 5) {
+                        gfa_value *a[5];
+                        int i2;
+                        for (i2 = 0; i2 < 5; i2++) a[i2] = gfa_value_pop(rt);
+                        gfx_box((int)gfa_value_to_long(a[1]),
+                                (int)gfa_value_to_long(a[2]),
+                                (int)(gfa_value_to_long(a[1]) +
+                                      gfa_value_to_long(a[3])),
+                                (int)(gfa_value_to_long(a[2]) +
+                                      gfa_value_to_long(a[4])));
+                        for (i2 = 0; i2 < 5; i2++)
+                            if (a[i2]) os_mem_free(a[i2]);
+                        gfx_update();
+                    } else {
+                        while (rt->sp > 0) gfa_value_discard(rt, 1);
+                    }
+                } else if (sub == 5) {  /* GETSIZE n : pousse w,h,y,x */
+                    if (rt->sp >= 1) gfa_value_pop(rt);
+                    gfa_value_push_long(rt, 0);  /* w */
+                    gfa_value_push_long(rt, 0);  /* h */
+                    gfa_value_push_long(rt, 0);  /* y */
+                    gfa_value_push_long(rt, 0);  /* x */
+                } else {
+                    /* TOPW / WINDTAB / SETDRAW / SHOWM / HIDEM */
+                    while (rt->sp > 0) gfa_value_discard(rt, 1);
+                }
+            }
+            break;
+
+        /* ---------------------------------------------------------- */
+        /* Turtle (DRAW)                                              */
+        /* ---------------------------------------------------------- */
+
+        case OP_DRAW_TURTLE:
+            if (rt->sp >= 1) {
+                v1 = gfa_value_pop(rt);
+                if (v1 && v1->type == GFA_VAL_STRING && v1->data.s)
+                    gfa_turtle_exec(rt, v1->data.s);
+                if (v1) os_mem_free(v1);
+                gfx_update();
+            }
+            break;
+
+        case OP_DRAW_QUERY:
+            if (rt->sp >= 1) {
+                int q = (int)gfa_value_to_long(gfa_value_pop(rt));
+                if (q == 0)      gfa_value_push_long(rt, (os_int32)rt->turtle_x);
+                else if (q == 1) gfa_value_push_long(rt, (os_int32)rt->turtle_y);
+                else             gfa_value_push_long(rt, (os_int32)rt->turtle_angle);
+            } else {
+                gfa_value_push_long(rt, 0);
+            }
+            break;
+
+        /* ---------------------------------------------------------- */
+        /* Matrices (MAT)                                             */
+        /* ---------------------------------------------------------- */
+
+        case OP_MAT_CLR: case OP_MAT_ONE: case OP_MAT_CPY:
+        case OP_MAT_ADD: case OP_MAT_SUB: case OP_MAT_MUL:
+        case OP_MAT_TRANS: case OP_MAT_INV: case OP_MAT_DET:
+        case OP_MAT_RANG: case OP_MAT_NORM: case OP_MAT_SET:
+        case OP_MAT_PRINT: case OP_MAT_READ: case OP_MAT_INPUT:
+            {
+                int sub;
+                const char *target = "";
+                const char *src1 = NULL;
+                const char *src2 = NULL;
+                double value = 0.0;
+                int has_value = 0;
+                int ret;
+
+                if (inst->opcode == OP_MAT_CLR) sub = MAT_OP_CLR;
+                else if (inst->opcode == OP_MAT_ONE) sub = MAT_OP_ONE;
+                else if (inst->opcode == OP_MAT_CPY) sub = MAT_OP_CPY;
+                else if (inst->opcode == OP_MAT_ADD) sub = MAT_OP_ADD;
+                else if (inst->opcode == OP_MAT_SUB) sub = MAT_OP_SUB;
+                else if (inst->opcode == OP_MAT_MUL) sub = MAT_OP_MUL;
+                else if (inst->opcode == OP_MAT_TRANS) sub = MAT_OP_TRANS;
+                else if (inst->opcode == OP_MAT_INV) sub = MAT_OP_INV;
+                else if (inst->opcode == OP_MAT_DET) sub = MAT_OP_DET;
+                else if (inst->opcode == OP_MAT_RANG) sub = MAT_OP_RANG;
+                else if (inst->opcode == OP_MAT_NORM) sub = MAT_OP_NORM;
+                else if (inst->opcode == OP_MAT_SET) sub = MAT_OP_SET;
+                else if (inst->opcode == OP_MAT_PRINT) sub = MAT_OP_PRINT;
+                else if (inst->opcode == OP_MAT_INPUT) sub = MAT_OP_INPUT;
+                else sub = MAT_OP_READ;
+
+                if (inst->operand.str_index >= 0 &&
+                    inst->operand.str_index < rt->program->str_count) {
+                    target = rt->program->strings[inst->operand.str_index];
+                }
+                if (inst->has_operand2 && inst->operand2.index2 >= 0 &&
+                    inst->operand2.index2 < rt->program->str_count) {
+                    src1 = rt->program->strings[inst->operand2.index2];
+                }
+                /* Forme sans cible : MAT DET(a) / MAT RANG(a) / … */
+                if (target[0] == '\0' && src1 != NULL &&
+                    (sub == MAT_OP_DET || sub == MAT_OP_RANG ||
+                     sub == MAT_OP_NORM)) {
+                    ret = gfa_matrix_scalar(rt, sub, src1);
+                    if (ret != 0 && !runtime_error(rt, ret, "MAT error"))
+                        return -1;
+                    break;
+                }
+                switch (sub) {
+                    case MAT_OP_ADD:
+                    case MAT_OP_SUB:
+                    case MAT_OP_MUL:
+                        if (rt->sp >= 1) {
+                            v1 = gfa_value_pop(rt);
+                            if (v1 && v1->type == GFA_VAL_STRING &&
+                                v1->data.s)
+                                src2 = v1->data.s;
+                            if (v1) os_mem_free(v1);
+                        }
+                        break;
+                    case MAT_OP_SET:
+                        if (rt->sp >= 1) {
+                            v1 = gfa_value_pop(rt);
+                            value = gfa_value_to_float(v1);
+                            has_value = 1;
+                            if (v1) os_mem_free(v1);
+                        }
+                        break;
+                    default:
+                        break;
+                }
+                /* Promouvoir les tableaux 2D en matrices si besoin
+                   (un DIM classique cree un tableau, MAT en fait
+                   une matrice). */
+                {
+                    gfa_variable *pm;
+                    if (target[0] != '\0') {
+                        pm = gfa_var_lookup(rt->globals, target);
+                        if (pm != NULL && pm->type == GFA_VAR_ARRAY &&
+                            pm->value.arr.num_dims == 2 &&
+                            pm->value.arr.data != NULL)
+                            pm->value.arr.is_matrix = 1;
+                    }
+                    if (src1 != NULL) {
+                        pm = gfa_var_lookup(rt->globals, src1);
+                        if (pm != NULL && pm->type == GFA_VAR_ARRAY &&
+                            pm->value.arr.num_dims == 2 &&
+                            pm->value.arr.data != NULL)
+                            pm->value.arr.is_matrix = 1;
+                    }
+                    if (src2 != NULL) {
+                        pm = gfa_var_lookup(rt->globals, src2);
+                        if (pm != NULL && pm->type == GFA_VAR_ARRAY &&
+                            pm->value.arr.num_dims == 2 &&
+                            pm->value.arr.data != NULL)
+                            pm->value.arr.is_matrix = 1;
+                    }
+                }
+                ret = gfa_matrix_exec(rt, sub, target, src1, src2,
+                                      has_value, value);
+                if (ret != 0) {
+                    if (!runtime_error(rt, ret, "MAT error"))
+                        return -1;
+                }
+            }
+            break;
+
+        case OP_ELLIPSE_GFX:
+            /* Stack: [x][y][rx][ry][fill] */
+            if (rt->sp >= 5) {
+                int ex, ey, erx, ery, efill;
+                gfa_value *ef[5];
+                int ei;
+                for (ei = 0; ei < 5; ei++) ef[ei] = gfa_value_pop(rt);
+                ex  = (int)gfa_value_to_long(ef[0]);
+                ey  = (int)gfa_value_to_long(ef[1]);
+                erx = (int)gfa_value_to_long(ef[2]);
+                ery = (int)gfa_value_to_long(ef[3]);
+                efill = (int)gfa_value_to_long(ef[4]);
+                gfx_ellipse(ex, ey, erx, ery, efill);
+                for (ei = 0; ei < 5; ei++)
+                    if (ef[ei]) os_mem_free(ef[ei]);
+                gfx_update();
+            } else {
+                while (rt->sp > 0) gfa_value_discard(rt, 1);
+            }
+            break;
+
+        case OP_ACHAR_GFX:
+            /* Stack: [x][y][code] */
+            if (rt->sp >= 3) {
+                v2 = gfa_value_pop(rt);   /* code */
+                {
+                    gfa_value *vy = gfa_value_pop(rt);
+                    gfa_value *vx = gfa_value_pop(rt);
+                    gfx_achar((int)gfa_value_to_long(vx),
+                              (int)gfa_value_to_long(vy),
+                              (int)gfa_value_to_long(v2));
+                    if (vx) os_mem_free(vx);
+                    if (vy) os_mem_free(vy);
+                }
+                if (v2) os_mem_free(v2);
+                gfx_update();
+            } else {
+                while (rt->sp > 0) gfa_value_discard(rt, 1);
+            }
+            break;
+
+        case OP_DIM:
+            /* Pile: [d1][d2]...[dn] (d1 en premier). str_index = nom,
+               operand2.index2 = ndim. Recree le tableau s'il a ete
+               libere par ERASE (data == NULL). */
+            {
+                int ndim, i;
+                os_int32 dims[7];
+                const char *name = NULL;
+                gfa_variable *dv;
+                if (inst->operand.str_index >= 0 &&
+                    inst->operand.str_index < rt->program->str_count)
+                    name = rt->program->strings[inst->operand.str_index];
+                ndim = inst->has_operand2 ? inst->operand2.index2 : 0;
+                if (ndim < 1) ndim = 1;
+                if (ndim > 7) ndim = 7;
+                for (i = ndim - 1; i >= 0 && rt->sp > 0; i--) {
+                    gfa_value *dv1 = gfa_value_pop(rt);
+                    dims[i] = (os_int32)gfa_value_to_long(dv1);
+                    if (dv1) os_mem_free(dv1);
+                }
+                if (name != NULL && rt->sp >= 0) {
+                    dv = gfa_var_lookup(rt->globals, name);
+                    if (dv == NULL || dv->type != GFA_VAR_ARRAY ||
+                        dv->value.arr.data == NULL) {
+                        gfa_var_array_create(rt->globals, name,
+                                             GFA_VAR_FLOAT, ndim, dims, 0);
+                    }
+                }
+            }
+            break;
+
         case OP_ON_GOTO:
         case OP_ON_GOSUB:
             /* Stack: [label_count] [label_str_idx...] [index] */
@@ -3035,4 +4952,193 @@ static int runtime_error(gfa_runtime *rt, int code, const char *msg)
     }
 
     return 0;  /* No handler, program will stop */
+}
+
+/* ================================================================== */
+/* Turtle (DRAW) - execution d'une chaine de commandes                */
+/* ================================================================== */
+
+/*
+ * gfa_turtle_exec - Interprete la chaine de commandes GFA "DRAW".
+ *   FD n / BK n   : avance/recule (echelle SX/SY appliquee)
+ *   LT a / RT a   : tourne a gauche/droite de a degres
+ *   TT a          : oriente a l'angle absolu a
+ *   MA x,y        : deplace (sans tracé) aux coords absolues
+ *   DA x,y        : trace jusqu'aux coords absolues
+ *   MR x,y        : deplacement relatif
+ *   DR x,y        : tracé relatif
+ *   PU / PD       : pen up / pen down
+ *   CO c          : couleur
+ *   SX n / SY n   : echelle du mouvement
+ * L'angle 0 = droite (+x), sens trigonométrique, y ecran vers le bas.
+ */
+void gfa_turtle_exec(gfa_runtime *rt, const char *prog)
+{
+    double sx = 1.0, sy = 1.0;
+    const char *p;
+
+    if (rt == NULL || prog == NULL) return;
+
+    /* Initialisation du turtle au centre de l'ecran (a la premiere
+       utilisation). */
+    if (rt->turtle_x == 0 && rt->turtle_y == 0 &&
+        rt->turtle_angle == 0 && rt->turtle_pen_down == 0 &&
+        rt->turtle_color == 0) {
+        rt->turtle_x = rt->screen_width / 2;
+        rt->turtle_y = rt->screen_height / 2;
+        rt->turtle_angle = 90;
+        rt->turtle_color = rt->current_color;
+    }
+
+    p = prog;
+    while (*p != '\0') {
+        char cmd[5];
+        double n = 0.0, m = 0.0;
+
+        /* Sauter les espaces */
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+
+        /* Lire le mot (lettres) */
+        {
+            int ci;
+            ci = 0;
+            while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                   *p == '_' || *p == '~') {
+                char c = *p++;
+                if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+                if (ci < 4) cmd[ci] = c;
+                ci++;
+            }
+            cmd[4] = '\0';
+        }
+
+        /* Lire les nombres separes par virgules/espaces */
+        n = 0.0; m = 0.0;
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (*p == '-' || *p == '+' || (*p >= '0' && *p <= '9')) {
+            char *end = NULL;
+            n = strtod(p, &end);
+            if (end != p) p = end;
+            while (*p == ' ' || *p == '\t' || *p == ',') p++;
+            if (*p == '-' || *p == '+' || (*p >= '0' && *p <= '9')) {
+                m = strtod(p, &end);
+                if (end != p) p = end;
+            }
+        }
+
+        if (cmd[0] == '\0') break;
+
+        if (cmd[0] == 'F' && cmd[1] == 'D' && cmd[2] == '\0') {
+            double a = (rt->turtle_angle * 3.141592653) / 180.0;
+            double nx = rt->turtle_x + n * sx * cos(a);
+            double ny = rt->turtle_y - n * sy * sin(a);
+            if (rt->turtle_pen_down)
+                gfx_turtle_line(rt->turtle_x, rt->turtle_y,
+                                (int)nx, (int)ny, rt->turtle_color);
+            rt->turtle_x = (int)nx;
+            rt->turtle_y = (int)ny;
+        } else if (cmd[0] == 'B' && cmd[1] == 'K' && cmd[2] == '\0') {
+            double a = (rt->turtle_angle * 3.141592653) / 180.0;
+            double nx = rt->turtle_x - n * sx * cos(a);
+            double ny = rt->turtle_y + n * sy * sin(a);
+            if (rt->turtle_pen_down)
+                gfx_turtle_line(rt->turtle_x, rt->turtle_y,
+                                (int)nx, (int)ny, rt->turtle_color);
+            rt->turtle_x = (int)nx;
+            rt->turtle_y = (int)ny;
+        } else if (cmd[0] == 'L' && cmd[1] == 'T' && cmd[2] == '\0') {
+            rt->turtle_angle += (int)n;
+        } else if (cmd[0] == 'R' && cmd[1] == 'T' && cmd[2] == '\0') {
+            rt->turtle_angle -= (int)n;
+        } else if (cmd[0] == 'T' && cmd[1] == 'T' && cmd[2] == '\0') {
+            rt->turtle_angle = (int)n;
+        } else if (cmd[0] == 'M' && cmd[1] == 'A' && cmd[2] == '\0') {
+            rt->turtle_x = (int)n;
+            rt->turtle_y = (int)m;
+        } else if (cmd[0] == 'D' && cmd[1] == 'A' && cmd[2] == '\0') {
+            if (rt->turtle_pen_down)
+                gfx_turtle_line(rt->turtle_x, rt->turtle_y,
+                                (int)n, (int)m, rt->turtle_color);
+            rt->turtle_x = (int)n;
+            rt->turtle_y = (int)m;
+        } else if (cmd[0] == 'M' && cmd[1] == 'R' && cmd[2] == '\0') {
+            rt->turtle_x += (int)n;
+            rt->turtle_y += (int)m;
+        } else if (cmd[0] == 'D' && cmd[1] == 'R' && cmd[2] == '\0') {
+            if (rt->turtle_pen_down)
+                gfx_turtle_line(rt->turtle_x, rt->turtle_y,
+                                rt->turtle_x + (int)n,
+                                rt->turtle_y + (int)m, rt->turtle_color);
+            rt->turtle_x += (int)n;
+            rt->turtle_y += (int)m;
+        } else if (cmd[0] == 'P' && cmd[1] == 'U' && cmd[2] == '\0') {
+            rt->turtle_pen_down = 0;
+        } else if (cmd[0] == 'P' && cmd[1] == 'D' && cmd[2] == '\0') {
+            rt->turtle_pen_down = 1;
+        } else if (cmd[0] == 'C' && cmd[1] == 'O' && cmd[2] == '\0') {
+            rt->turtle_color = (int)n;
+        } else if (cmd[0] == 'S' && cmd[1] == 'X' && cmd[2] == '\0') {
+            sx = (n != 0.0) ? n : 1.0;
+        } else if (cmd[0] == 'S' && cmd[1] == 'Y' && cmd[2] == '\0') {
+            sy = (n != 0.0) ? n : 1.0;
+        }
+        /* Autres commandes : ignorees */
+    }
+}
+
+/* ================================================================== */
+/* Tri de tableaux (QSORT / SSORT)                                    */
+/* ================================================================== */
+
+static int gfa_qsort_partition(double *a, int lo, int hi)
+{
+    double pivot = a[(lo + hi) / 2];
+    int i = lo - 1;
+    int j = hi + 1;
+
+    for (;;) {
+        do { i++; } while (a[i] < pivot);
+        do { j--; } while (a[j] > pivot);
+        if (i >= j) return j;
+        {
+            double t = a[i];
+            a[i] = a[j];
+            a[j] = t;
+        }
+    }
+}
+
+static void gfa_qsort_rec(double *a, int lo, int hi)
+{
+    int j;
+
+    if (lo >= hi) return;
+    j = gfa_qsort_partition(a, lo, hi);
+    gfa_qsort_rec(a, lo, j);
+    gfa_qsort_rec(a, j + 1, hi);
+}
+
+void gfa_array_quicksort(double *arr, int lo, int hi)
+{
+    if (arr == NULL || lo < 0 || hi > 4096) return;
+    gfa_qsort_rec(arr, lo, hi);
+}
+
+void gfa_array_shellsort(double *arr, int lo, int hi)
+{
+    int gap, i, j;
+    if (arr == NULL || lo < 0 || hi > 4096) return;
+    for (gap = (hi - lo) / 2; gap > 0; gap /= 2) {
+        for (i = lo + gap; i <= hi; i++) {
+            double tmp = arr[i];
+            for (j = i; j >= lo + gap; j -= gap) {
+                if (arr[j - gap] > tmp)
+                    arr[j] = arr[j - gap];
+                else
+                    break;
+            }
+            arr[j] = tmp;
+        }
+    }
 }

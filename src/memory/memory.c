@@ -372,6 +372,28 @@ void gfa_var_set_from_long(gfa_variable *var, os_int32 value)
     gfa_var_set_from_float(var, (double)value);
 }
 
+static void gfa_var_set_str_data(gfa_variable *var, const char *value, int len)
+{
+    /* Allouer ou reallouer le buffer */
+    if (var->value.str.data == NULL || var->value.str.capacity < len + 1) {
+        if (var->value.str.data != NULL) {
+            os_mem_free(var->value.str.data);
+        }
+        var->value.str.capacity = len + 1;
+        var->value.str.data = (char *)os_mem_alloc(
+            (size_t)(var->value.str.capacity));
+        if (var->value.str.data == NULL) {
+            var->value.str.length = 0;
+            var->value.str.capacity = 0;
+            return;
+        }
+    }
+
+    memcpy(var->value.str.data, value, (size_t)len);
+    var->value.str.data[len] = '\0';
+    var->value.str.length = len;
+}
+
 void gfa_var_set_from_string(gfa_variable *var, const char *value)
 {
     int len;
@@ -389,23 +411,21 @@ void gfa_var_set_from_string(gfa_variable *var, const char *value)
     /* Limite GFA Basic : 32767 caracteres max */
     if (len > 32767) len = 32767;
 
-    /* Allouer ou reallouer le buffer */
-    if (var->value.str.data == NULL || var->value.str.capacity < len + 1) {
-        if (var->value.str.data != NULL) {
-            os_mem_free(var->value.str.data);
-        }
-        var->value.str.capacity = len + 1;
-        var->value.str.data = (char *)os_mem_alloc(
-            (size_t)(var->value.str.capacity));
-        if (var->value.str.data == NULL) {
-            var->value.str.length = 0;
-            var->value.str.capacity = 0;
-            return;
-        }
-    }
+    gfa_var_set_str_data(var, value, len);
+}
 
-    strcpy(var->value.str.data, value);
-    var->value.str.length = len;
+/*
+ * gfa_var_set_from_string_len - Affectation avec longueur explicite
+ * (chaines binaires, ex : resultat de MKI$).
+ */
+void gfa_var_set_from_string_len(gfa_variable *var, const char *value,
+                                 os_int32 len)
+{
+    if (var == NULL || value == NULL) return;
+    if (var->type != GFA_VAR_STRING) return;
+    if (len < 0) len = 0;
+    if (len > 32767) len = 32767;
+    gfa_var_set_str_data(var, value, (int)len);
 }
 
 void *gfa_var_get_address(gfa_variable *var)
@@ -430,7 +450,8 @@ void *gfa_var_get_address(gfa_variable *var)
 
 gfa_variable *gfa_var_array_create(gfa_symbol_table *table,
                                     const char *name, gfa_var_type elem_type,
-                                    int num_dims, os_int32 *dim_sizes)
+                                    int num_dims, os_int32 *dim_sizes,
+                                    os_int32 base)
 {
     gfa_variable *var;
     os_int32 total;
@@ -465,6 +486,7 @@ gfa_variable *gfa_var_array_create(gfa_symbol_table *table,
     var->value.arr.num_dims       = num_dims;
     var->value.arr.total_elements = total;
     var->value.arr.element_size   = (int)elem_size;
+    var->value.arr.base           = base;
 
     /* Copier les tailles de dimensions */
     var->value.arr.dim_sizes = (os_int32 *)os_mem_alloc(
@@ -776,10 +798,22 @@ void gfa_value_push_float(gfa_runtime *rt, double value)
 
 void gfa_value_push_string(gfa_runtime *rt, char *str, int owns)
 {
+    gfa_value_push_string_len(rt, str, 0, owns);
+}
+
+/*
+ * gfa_value_push_string_len - Pousse une chaine avec longueur explicite
+ * (0 = strlen). Permet les chaines binaires (octets nuls) des
+ * fonctions MKI$/MKL$/MKF$/MKD$.
+ */
+void gfa_value_push_string_len(gfa_runtime *rt, char *str,
+                               os_int32 len, int owns)
+{
     if (rt == NULL || rt->sp >= GFA_VALUE_STACK_SIZE) return;
     rt->value_stack[rt->sp].type = GFA_VAL_STRING;
     rt->value_stack[rt->sp].data.s = str;
     rt->value_stack[rt->sp].owns_string = owns;
+    rt->value_stack[rt->sp].str_len = len;
     rt->sp++;
 }
 

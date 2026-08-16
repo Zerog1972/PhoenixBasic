@@ -365,7 +365,26 @@ int gfa_get_channel(int channel, long record_num)
     os_int32 nread;
 
     gf = gfa_files_get(channel);
-    if (gf == NULL || gf->mode != GFA_FILE_RANDOM) return -1;
+    if (gf == NULL) return -1;
+
+    /* Mode sequentiel : lit un enregistrement (128 octets max)
+       a la position courante (ou record_num si specifie) dans
+       le buffer. */
+    if (gf->mode == GFA_FILE_INPUT) {
+        if (record_num >= 0)
+            os_file_seek(gf->handle, (os_int32)record_num, OS_SEEK_SET);
+        if (gf->field_buffer == NULL) {
+            gf->field_buffer = (char *)os_mem_alloc(128);
+            if (gf->field_buffer == NULL) return -1;
+            gf->field_size = 128;
+        }
+        memset(gf->field_buffer, 0, 128);
+        nread = os_file_read(gf->handle, gf->field_buffer, 128);
+        if (nread < 0) return -1;
+        return (int)nread;
+    }
+
+    if (gf->mode != GFA_FILE_RANDOM) return -1;
 
     if (gf->record_length <= 0) return -1;
 
@@ -395,7 +414,25 @@ int gfa_put_channel(int channel, long record_num)
     os_int32 written;
 
     gf = gfa_files_get(channel);
-    if (gf == NULL || gf->mode != GFA_FILE_RANDOM) return -1;
+    if (gf == NULL) return -1;
+
+    /* Mode sequentiel : ecrit le buffer (128 octets max) a la
+       position courante (ou record_num si specifiee). */
+    if (gf->mode == GFA_FILE_OUTPUT || gf->mode == GFA_FILE_UPDATE ||
+        gf->mode == GFA_FILE_APPEND) {
+        if (gf->field_buffer == NULL) {
+            gf->field_buffer = (char *)os_mem_alloc(128);
+            if (gf->field_buffer == NULL) return -1;
+            gf->field_size = 128;
+            memset(gf->field_buffer, 0, 128);
+        }
+        if (record_num >= 0)
+            os_file_seek(gf->handle, (os_int32)record_num, OS_SEEK_SET);
+        written = os_file_write(gf->handle, gf->field_buffer, 128);
+        return (written >= 0) ? 0 : -1;
+    }
+
+    if (gf->mode != GFA_FILE_RANDOM) return -1;
 
     if (gf->record_length <= 0) return -1;
 
@@ -517,18 +554,39 @@ int gfa_field(int channel, int field_size, const char *field_name)
     (void)field_name; /* Le nom est gere par le runtime (variables) */
 
     gf = gfa_files_get(channel);
-    if (gf == NULL || gf->mode != GFA_FILE_RANDOM) {
+    if (gf == NULL || (gf->mode != GFA_FILE_RANDOM &&
+                       gf->mode != GFA_FILE_INPUT)) {
         return 50; /* Not an R-File */
     }
 
     if (gf->field_buffer == NULL) {
-        gf->field_buffer = (char *)os_mem_alloc((size_t)field_size);
+        int sz = field_size;
+        if (gf->mode == GFA_FILE_INPUT && sz < 128) sz = 128;
+        gf->field_buffer = (char *)os_mem_alloc((size_t)sz);
         if (gf->field_buffer == NULL) return 8; /* Out of memory */
-        gf->field_size = field_size;
+        gf->field_size = sz;
+        memset(gf->field_buffer, 0, (size_t)sz);
     }
 
     gf->field_count++;
     return 0;
+}
+
+/*
+ * gfa_field_buffer - Retourne le buffer FIELD du canal (pour copie
+ * vers la variable dans le runtime).
+ */
+char *gfa_field_buffer(int channel, int *size)
+{
+    gfa_file *gf;
+
+    gf = gfa_files_get(channel);
+    if (gf == NULL || gf->field_buffer == NULL) {
+        if (size != NULL) *size = 0;
+        return NULL;
+    }
+    if (size != NULL) *size = gf->field_size;
+    return gf->field_buffer;
 }
 
 void gfa_lset(char *field_var, const char *value, int field_len)

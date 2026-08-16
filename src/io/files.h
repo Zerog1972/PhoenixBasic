@@ -212,6 +212,12 @@ void gfa_name_file(const char *oldname, const char *newname);
 int gfa_field(int channel, int field_size, const char *field_name);
 
 /*
+ * gfa_field_buffer - Retourne le buffer FIELD du canal donne.
+ * size receit la taille du buffer (si non NULL).
+ */
+char *gfa_field_buffer(int channel, int *size);
+
+/*
  * gfa_lset - Affecte une valeur a un champ FIELD (aligne a gauche).
  * Equivalent GFA : LSET var$ = expr
  */
