@@ -311,6 +311,8 @@ typedef enum {
     OP_ELLIPSE_GFX  = 195,  /* pile [x][y][rx][ry][fill]                */
     OP_ACHAR_GFX    = 196,  /* pile [x][y][code]                        */
     OP_MAT_INPUT    = 197,  /* str_index = nom cible (console)          */
+    OP_ARRAYFILL    = 194,  /* pile [valeur] ; operand = tableau        */
+    OP_DIM_QUESTION = 200,  /* operand = tableau ; push chaine dims     */
     OP_LINE_INPUT_FILE = 198, /* pile [canal] ; operand = var$          */
     OP_WINDOW_GFX   = 199,  /* pile [x0][y0][x1][y1] : WINDOW (..),(..) */
 

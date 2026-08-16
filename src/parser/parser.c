@@ -1610,18 +1610,23 @@ static ast_node *parse_statement(gfa_parser *parser)
 
         case TOK_ARRAYFILL:
             {
-                ast_node *node;
-                node = ast_create_int(AST_CALL, 0);
+                ast_node *node, *ident;
                 gfa_lexer_next(parser->lexer);
-                while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
-                       gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
-                    ast_add_child(node, parse_expression(parser));
-                    if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                node = ast_create(AST_ARRAYFILL);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                    ident = ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name);
+                    gfa_lexer_next(parser->lexer);
+                    node->left = ident;
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
                         gfa_lexer_next(parser->lexer);
-                    } else {
-                        break;
+                        if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                            gfa_lexer_next(parser->lexer);
                     }
                 }
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+                    gfa_lexer_next(parser->lexer);
+                node->body = parse_expression(parser);   /* valeur */
                 return node;
             }
 
@@ -3285,6 +3290,28 @@ static ast_node *parse_primary(gfa_parser *parser)
                 return node;
             }
 
+        /* DIM? arr : renvoie les dimensions du tableau en chaine */
+        case TOK_DIM_QUESTION:
+            {
+                ast_node *node, *ident;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_DIM_QUESTION);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+                    gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer)
+                        == TOK_IDENTIFIER) {
+                        ident = ast_create_ident(AST_ASSIGN,
+                            parser->lexer->current.value.ident_name);
+                        gfa_lexer_next(parser->lexer);
+                        node->left = ident;
+                    }
+                    if (gfa_lexer_current_token(parser->lexer)
+                        == TOK_RPAREN)
+                        gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
+
         /* Fonctions integrees */
         case TOK_ABS: case TOK_ASC: case TOK_LEN: case TOK_VAL:
         case TOK_SIN: case TOK_COS: case TOK_TAN: case TOK_ATN:
@@ -3309,7 +3336,7 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_ASIN: case TOK_ACOS: case TOK_SINQ: case TOK_COSQ:
         case TOK_SINH: case TOK_COSH: case TOK_TANH:
         case TOK_FACT: case TOK_COMBIN: case TOK_VARIAT:
-        case TOK_DIM_QUESTION: case TOK_ARRPTR: case TOK_VARPTR:
+        case TOK_ARRPTR: case TOK_VARPTR:
         case TOK_EXIST: case TOK_DFREE: case TOK_DIR_TOK: case TOK_DIR_TOK2:
         case TOK_FSFIRST: case TOK_FSNEXT:
         case TOK_FRE: case TOK_HIMEM:

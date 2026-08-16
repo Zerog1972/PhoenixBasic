@@ -791,6 +791,31 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
             }
         }
         break;
+    case AST_ARRAYFILL:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL && node->body) {
+                cg_expression(ctx, node->body);   /* valeur de remplissage */
+                cg_emit_ptr(ctx, OP_ARRAYFILL, (void *)v);
+            }
+        }
+        break;
+    case AST_DIM_QUESTION:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL) {
+                cg_emit_ptr(ctx, OP_DIM_QUESTION, (void *)v);
+            } else {
+                cg_emit_float_const(ctx, OP_PUSH_CONST, 0.0);
+            }
+        }
+        break;
     case AST_INSERT_ELEM:
         {
             gfa_variable *v = NULL;
@@ -1155,6 +1180,20 @@ static void cg_expression(codegen_ctx *ctx, ast_node *node)
     case AST_CALL:
     case AST_FN_CALL:
         cg_call(ctx, node);
+        break;
+
+    case AST_DIM_QUESTION:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL) {
+                cg_emit_ptr(ctx, OP_DIM_QUESTION, (void *)v);
+            } else {
+                cg_emit_float_const(ctx, OP_PUSH_CONST, 0.0);
+            }
+        }
         break;
 
     default:

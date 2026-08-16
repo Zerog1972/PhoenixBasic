@@ -4265,6 +4265,56 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        case OP_ARRAYFILL:
+            {
+                gfa_variable *av = (gfa_variable *)inst->operand.ptr_val;
+                gfa_value *fv = (rt->sp >= 1) ? gfa_value_pop(rt) : NULL;
+                if (av != NULL && av->type == GFA_VAR_ARRAY
+                    && av->value.arr.data != NULL) {
+                    double *dp = (double *)av->value.arr.data;
+                    int i;
+                    int n = (int)av->value.arr.total_elements;
+                    double val = (fv != NULL) ? gfa_value_to_float(fv) : 0.0;
+                    for (i = 0; i < n; i++) dp[i] = val;
+                }
+                if (fv) {
+                    if (fv->owns_string && fv->data.s) os_mem_free(fv->data.s);
+                    os_mem_free(fv);
+                }
+            }
+            break;
+
+        case OP_DIM_QUESTION:
+            {
+                gfa_variable *dv = (gfa_variable *)inst->operand.ptr_val;
+                char buf[64];
+                const char *out = "0";
+                if (dv != NULL && dv->type == GFA_VAR_ARRAY
+                    && dv->value.arr.data != NULL) {
+                    int i;
+                    int pos = 0;
+                    buf[0] = '\0';
+                    for (i = 0; i < dv->value.arr.num_dims && i < 7; i++) {
+                        char part[16];
+                        sprintf(part, "%d", (int)dv->value.arr.dim_sizes[i]);
+                        if (i > 0) {
+                            if (pos < 50) { buf[pos++] = ','; buf[pos] = '\0'; }
+                        }
+                        {
+                            int pl = (int)strlen(part);
+                            if (pos + pl < 63) {
+                                os_mem_copy(&buf[pos], part, (size_t)pl);
+                                pos += pl;
+                                buf[pos] = '\0';
+                            }
+                        }
+                    }
+                    out = buf;
+                }
+                gfa_value_push_string(rt, gfa_str_new(out), 1);
+            }
+            break;
+
         case OP_CLEAR_ALL:
             {
                 int bi, bj;

@@ -144,6 +144,9 @@ typedef enum {
                            left = cible, body = src1, cond = src2,
                            step = valeur scalaire */
     AST_QSORT_STMT,     /* QSORT arr(), lo, hi                    */
+    AST_ARRAYFILL,      /* ARRAYFILL arr, valeur : left = ident,
+                           body = expression de remplissage       */
+    AST_DIM_QUESTION,   /* DIM?(arr) : left = ident du tableau    */
     AST_INSERT_ELEM,    /* INSERT x(i), val                       */
     AST_DELETE_ELEM,    /* DELETE x(i)                            */
     AST_DRAW,           /* DRAW "prog" (turtle) ou DRAW(n)        */
