@@ -352,6 +352,13 @@ int os_fs_delete(const char *name);
 int os_fs_rename(const char *old_name, const char *new_name);
 
 /*
+ * os_get_env — Retourne la valeur d'une variable d'environnement.
+ * hote : environ(3). ST (MINT) : NULL (pas d'environnement POSIX).
+ * Le resultat est une chaine statique, ne pas liberer.
+ */
+const char *os_get_env(const char *name);
+
+/*
  * os_fs_free — Retourne l'espace libre sur le disque en octets (DFREE).
  * drive : 0=courant, 1=A:, 2=B:, ...
  * Retourne -1 si erreur.
@@ -425,6 +432,13 @@ int os_con_input_char(void);
  * Retourne le code ASCII, ou -1 si aucune touche pressée.
  */
 int os_con_input_key(void);
+
+/*
+ * os_con_key_available — Indique si une touche est disponible
+ * dans le tampon clavier SANS la consommer (Cconis / _kbhit).
+ * Retourne 1 si une touche est en attente, 0 sinon.
+ */
+int os_con_key_available(void);
 
 /*
  * os_con_output_char — Émet un caractère vers la console (CCONOUT).

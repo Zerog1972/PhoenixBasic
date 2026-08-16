@@ -808,6 +808,14 @@ int os_fs_rename(const char *old_name, const char *new_name)
     return 0;
 }
 
+const char *os_get_env(const char *name)
+{
+    if (name == NULL) return NULL;
+    /* getenv est disponible sur l'hote (POSIX/Windows) et sous MINT
+       (retourne NULL si pas d'environnement). */
+    return getenv(name);
+}
+
 os_int32 os_fs_free(int drive)
 {
 #ifdef _WIN32
@@ -1136,6 +1144,15 @@ int os_con_input_key(void)
         return Cconin() & 0xFF;
     }
     return -1;
+#endif
+}
+
+int os_con_key_available(void)
+{
+#ifdef _WIN32
+    return _kbhit() ? 1 : 0;
+#else
+    return Cconis() ? 1 : 0;
 #endif
 }
 
