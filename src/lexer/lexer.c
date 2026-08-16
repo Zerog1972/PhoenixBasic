@@ -194,6 +194,10 @@ gfa_token_type gfa_lexer_next(gfa_lexer *lexer)
     /* Scanner le prochain token */
     skip_whitespace(lexer);
 
+    /* Nettoyer les champs dynamiques du token precedent (eviter
+       les ident_name/string_value residuels entre tokens) */
+    free_token_value(&lexer->current);
+
     if (lexer->pos >= lexer->src_len) {
         lexer->current.type = TOK_EOF;
         lexer->current.line = lexer->line;
@@ -233,8 +237,8 @@ gfa_token_type gfa_lexer_peek_token(gfa_lexer *lexer)
             lexer->peek = lexer->current;
         }
 
-        /* Restaurer l'etat */
-        free_token_value(&lexer->current);
+        /* Restaurer l'etat : le token scanné appartient maintenant
+           a peek (copie superficielle) — ne pas le liberer ici. */
         lexer->current = saved_current;
         lexer->pos     = saved_pos;
         lexer->line    = saved_line;
@@ -481,6 +485,16 @@ static gfa_token_type scan_token(gfa_lexer *lexer)
             lexer->current.column = start_col;
             return TOK_AT;
 
+        case '{':
+            lexer->current.line = start_line;
+            lexer->current.column = start_col;
+            return TOK_LBRACE;
+
+        case '}':
+            lexer->current.line = start_line;
+            lexer->current.column = start_col;
+            return TOK_RBRACE;
+
         case '~':
             lexer->current.line = start_line;
             lexer->current.column = start_col;
@@ -719,8 +733,9 @@ static gfa_token_type scan_identifier(gfa_lexer *lexer)
         c = CURRENT_CHAR(lexer);
     }
 
-    /* Verifier les suffixes de type ($, %, &, !, |, #) */
-    if (c == '$' || c == '%' || c == '&' || c == '!' || c == '|' || c == '#') {
+    /* Verifier les suffixes de type ($, %, &, !, |, #)
+       et ? (fonctions type VAL?) */
+    if (c == '$' || c == '%' || c == '&' || c == '!' || c == '|' || c == '#' || c == '?') {
         buf[i++] = c;
         ADVANCE(lexer);
     }
