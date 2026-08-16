@@ -1315,7 +1315,6 @@ static int execute_instruction(gfa_runtime *rt)
                 gfa_call_frame *frame;
                 int i;
                 frame = &rt->call_stack[--rt->call_depth];
-                fprintf(stderr, "DEBUG OP_RET: return_ip=%d\n", frame->return_ip);
                 rt->ip = frame->return_ip;
                 while (rt->sp > frame->return_sp && rt->sp > 0) {
                     gfa_value_discard(rt, 1);
@@ -4026,8 +4025,6 @@ static int execute_instruction(gfa_runtime *rt)
 
         case OP_ON_ERROR:
             /* operand = resolved IP address of error handler label */
-            fprintf(stderr, "DEBUG OP_ON_ERROR: operand=%ld error_label=%d\n",
-                    (long)operand, (int)operand);
             rt->error_label = (int)operand;
             rt->on_error_active = (operand >= 0) ? 1 : 0;
             gfa_on_error_gosub((int)operand);
@@ -4048,7 +4045,6 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_END:
-            fprintf(stderr, "DEBUG OP_END at ip=%d, running=%d\n", rt->ip, rt->running);
             rt->running = 0;
             return 0;
 
@@ -4894,9 +4890,6 @@ static int runtime_error(gfa_runtime *rt, int code, const char *msg)
 {
     if (rt == NULL) return 0;
 
-    fprintf(stderr, "DEBUG runtime_error: code=%d on_error_active=%d error_label=%d fatal=%d\n",
-            code, rt->on_error_active, rt->error_label, rt->fatal_error);
-
     rt->error_code = code;
 
     if (rt->trace_on && code != 0) {
@@ -4928,8 +4921,6 @@ static int runtime_error(gfa_runtime *rt, int code, const char *msg)
 
         /* Save resume IP (current instruction that caused the error) */
         rt->resume_ip = rt->ip;
-        fprintf(stderr, "DEBUG runtime_error: jumping to handler at ip=%d, resume_ip=%d\n",
-                rt->error_label, rt->ip);
 
         /* Push a call frame so RETURN goes back */
         if (rt->call_depth < GFA_MAX_CALL_DEPTH) {
@@ -4939,14 +4930,12 @@ static int runtime_error(gfa_runtime *rt, int code, const char *msg)
             frame->is_gosub  = 1;
             frame->proc_index = 0;
             frame->saved_count = 0;
-            fprintf(stderr, "DEBUG runtime_error: pushed call frame, return_ip=%d\n", frame->return_ip);
         }
 
         /* Jump to error handler.
          * The caller (OP_ERROR etc.) returns 0, skipping post-switch rt->ip++,
          * so we set ip directly to the label address. */
         rt->ip = rt->error_label;
-        fprintf(stderr, "DEBUG runtime_error: set ip=%d\n", rt->ip);
 
         return 1;  /* Successfully jumped to handler */
     }

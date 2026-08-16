@@ -190,15 +190,10 @@ int gfa_codegen_compile(gfa_symbol_table *symbol_table,
 
     cg_program(&ctx, ast);
     /* Label resolution pass */
-    fprintf(stderr, "DEBUG codegen: label_count=%d\n", label_count);
     if (labels != NULL && label_count > 0) {
         /* Register label positions */
-        for (i = 0; i < label_count; i++) {
-            fprintf(stderr, "DEBUG codegen: label[%d]='%s'\n", i, labels[i].name ? labels[i].name : "(null)");
-        }
         for (i = 0; i < ctx.bc->length; i++) {
             gfa_instruction *inst = &ctx.bc->code[i];
-            fprintf(stderr, "DEBUG codegen: inst[%d] op=%d\n", i, (int)inst->opcode);
             if (inst->opcode == OP_LABEL) {
                 const char *lbl_name;
                 int str_idx, j;
@@ -226,15 +221,11 @@ int gfa_codegen_compile(gfa_symbol_table *symbol_table,
                 const char *target_name;
                 int str_idx, j;
                 str_idx = inst->operand2.int_val2;
-                fprintf(stderr, "DEBUG codegen: patching op=%d str_idx=%d target='%s'\n",
-                        (int)inst->opcode, str_idx,
-                        (str_idx >= 0 && str_idx < ctx.bc->str_count) ? ctx.bc->strings[str_idx] : "?");
                 if (str_idx >= 0 && str_idx < ctx.bc->str_count) {
                     target_name = ctx.bc->strings[str_idx];
                     for (j = 0; j < label_count; j++) {
                         if (labels[j].name && target_name && strieq(labels[j].name, target_name)) {
                             inst->operand.int_val = (os_int32)labels[j].bytecode_ip;
-                            fprintf(stderr, "DEBUG codegen: patched to ip=%d\n", labels[j].bytecode_ip);
                             break;
                         }
                     }

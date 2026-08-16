@@ -147,18 +147,11 @@ static int run_program(const char *source)
         return 1;
     }
 
-    fprintf(stderr, "DBGMAIN: apres codegen code[0].int=%d\n",
-            (int)bc->code[0].operand.int_val);
     /* Liberer le parser (l'AST est libere avec) */
     gfa_parser_free(parser);
-    fprintf(stderr, "DBGMAIN: apres free parser code[0].int=%d\n",
-            (int)bc->code[0].operand.int_val);
 
     /* Charger et executer le bytecode */
     result = gfa_runtime_load(rt, bc);
-    fprintf(stderr, "DBGMAIN: &bc=%p rt->program=%p code[0].int=%d\n",
-            (void *)bc, (void *)rt->program,
-            (int)bc->code[0].operand.int_val);
     if (result != 0) {
         fprintf(stderr, "Error: cannot load bytecode\n");
         gfa_runtime_shutdown(rt);
