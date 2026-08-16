@@ -34,9 +34,9 @@ endif
 
 # Tous les .c et leurs objets
 SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/gfamath.c \
-       src/builtins/bit_ops.c \
+       src/builtins/bit_ops.c src/builtins/matrix.c \
        src/io/files.c src/events/events.c src/sound/sound.c src/tos/tos.c \
-       src/runtime/runtime.c src/memory/memory.c \
+       src/runtime/runtime.c src/runtime/vmem.c src/memory/memory.c \
        src/lexer/keywords.c src/lexer/lexer.c \
        src/parser/ast.c src/parser/parser.c \
        src/codegen/codegen.c \
