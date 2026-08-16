@@ -783,7 +783,7 @@ char *gfa_str_dup_n(const char *s, int n)
         return gfa_str_new("");
     }
 
-    for (i = 0; i < n && s[i] != '\0'; i++) {
+    for (i = 0; i < n; i++) {
         result[i] = s[i];
     }
     result[i] = '\0';
