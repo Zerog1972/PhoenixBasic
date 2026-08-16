@@ -68,6 +68,8 @@ typedef struct gfa_variable {
             char   *data;            /* Donnees brutes               */
             os_int32 total_elements; /* Nombre total d'elements      */
             os_int32 element_size;   /* Taille d'un element en octets*/
+            os_int32 base;           /* Index bas (OPTION BASE)      */
+            int      is_matrix;      /* 1 = matrice MAT              */
         } arr;
 
     } value;
@@ -110,6 +112,8 @@ typedef struct {
         void    *addr;  /* Pointeur generique */
     } data;
     int owns_string;    /* 1 si la chaine doit etre liberee */
+    os_int32 str_len;   /* Longueur explicite (0 = strlen) : chaines
+                          binaires avec octets nuls (MKI$ et co). */
 } gfa_value;
 
 #define GFA_VALUE_STACK_SIZE 1024
@@ -263,6 +267,53 @@ typedef enum {
     OP_LABEL        = 140,  /* Marqueur d'etiquette (pas execute)    */
     OP_LINE_NUM     = 141,  /* Marqueur de numero de ligne           */
 
+    /* Tableaux : operations sur elements / tri */
+    OP_ERASE_VAR   = 160,  /* operand = ptr var ; efface tableau in place */
+    OP_CLEAR_ALL    = 161,  /* CLEAR : reset toutes les variables        */
+    OP_QSORT        = 162,  /* operand = ptr arr ; pile [lo][hi]         */
+    OP_SSORT        = 163,  /* tri Shell                                  */
+    OP_INSERT_ELEM  = 164,  /* operand = ptr arr ; pile [idx][val]       */
+    OP_DELETE_ELEM  = 165,  /* operand = ptr arr ; pile [idx]            */
+
+    /* Graphismes etendus (VDI ANSI) */
+    OP_PLOT_GFX     = 166,  /* pile [x][y]                               */
+    OP_TEXT_GFX     = 167,  /* pile [x][y][texte$]                       */
+    OP_POLY_GFX     = 168,  /* pile [n][xy...][fill] ; operand = mode    */
+    OP_FILL_GFX     = 169,  /* pile [x][y][limite]                       */
+    OP_GETBIT_GFX   = 170,  /* pile [x1][y1][x2][y2][var$] capture       */
+    OP_PUTBIT_GFX   = 171,  /* pile [x][y][var$]                         */
+    OP_SETCOLOR     = 172,  /* pile [n][val] registre palette            */
+    OP_MODE_GFX     = 173,  /* pile [mode]                               */
+    OP_CLIP_GFX     = 174,  /* pile [x1][y1][x2][y2] (ACLIP)             */
+
+    /* Fenetres GEM (emulation ANSI) */
+    OP_WINDOW_STMT  = 175,  /* operand = sous-op (CLEARW/TITLEW/...)     */
+
+    /* Turtle (DRAW) */
+    OP_DRAW_TURTLE  = 176,  /* pile [prog$]                              */
+    OP_DRAW_QUERY   = 177,  /* pile [q] : 0=X, 1=Y, 2=angle              */
+
+    /* Matrices (MAT) */
+    OP_MAT_CLR      = 180,  /* operand = ptr mat                         */
+    OP_MAT_ONE      = 181,  /* operand = ptr mat                         */
+    OP_MAT_CPY      = 182,  /* operand = src ptr ; pile [dst ptr]        */
+    OP_MAT_ADD      = 183,  /* pile [dst][b][a]                          */
+    OP_MAT_SUB      = 184,
+    OP_MAT_MUL      = 185,
+    OP_MAT_TRANS    = 186,  /* pile [dst][src]                           */
+    OP_MAT_INV      = 187,
+    OP_MAT_DET      = 188,  /* pile [src] -> scalaire                    */
+    OP_MAT_RANG     = 189,
+    OP_MAT_NORM     = 190,
+    OP_MAT_SET      = 191,  /* pile [dst][val]                           */
+    OP_MAT_PRINT    = 192,  /* pile [src]                                */
+    OP_MAT_READ     = 193,  /* str_index = nom cible (lit depuis DATA)  */
+    OP_ELLIPSE_GFX  = 195,  /* pile [x][y][rx][ry][fill]                */
+    OP_ACHAR_GFX    = 196,  /* pile [x][y][code]                        */
+    OP_MAT_INPUT    = 197,  /* str_index = nom cible (console)          */
+    OP_LINE_INPUT_FILE = 198, /* pile [canal] ; operand = var$          */
+    OP_WINDOW_GFX   = 199,  /* pile [x0][y0][x1][y1] : WINDOW (..),(..) */
+
     OP_COUNT
 } gfa_opcode;
 
@@ -366,10 +417,31 @@ typedef struct gfa_runtime {
     int             stopped;       /* 1 = STOP rencontre              */
     int             quit_code;     /* Code de sortie                  */
 
+    /* Tampon clavier emule (KEYPRESS/KEYGET/KEYTEST/KEYLOOK) */
+    int             keybuf[32];    /* Codes ASCII en attente          */
+    int             keybuf_count;  /* Nombre d'entrees dans keybuf    */
+
     /* Resolution ecran */
     int             screen_mode;   /* 0=LOW, 1=MEDIUM, 2=HIGH         */
     int             screen_width;
     int             screen_height;
+
+    /* Variable "courante" (derniere referencee) pour SGET/SPUT/BGET/BPUT */
+    gfa_variable   *last_var;
+
+    /* Dimensions de la derniere zone GET (pour PUT) */
+    int             capture_w;
+    int             capture_h;
+
+    /* Turtle (DRAW) : x, y en pixels, angle en degres */
+    int             turtle_x;
+    int             turtle_y;
+    int             turtle_angle;
+    int             turtle_pen_down;
+    int             turtle_color;
+
+    /* KEYDEF : chaine associee a chaque touche de fonction (1-10) */
+    char           *keydef[11];
 
     /* Retour de fonction */
     gfa_value       function_return;
@@ -475,6 +547,13 @@ void gfa_var_set_from_long(gfa_variable *var, os_int32 value);
 void gfa_var_set_from_string(gfa_variable *var, const char *value);
 
 /*
+ * gfa_var_set_from_string_len - Affecte une chaine a une variable
+ * avec longueur explicite (donnees binaires, ex : MKI$).
+ */
+void gfa_var_set_from_string_len(gfa_variable *var, const char *value,
+                                 os_int32 len);
+
+/*
  * gfa_var_get_address - Retourne un pointeur vers la valeur brute
  * de la variable (pour PEEK/POKE/VARPTR).
  */
@@ -500,7 +579,8 @@ void gfa_symbol_table_clear_vars(gfa_symbol_table *table);
  */
 gfa_variable *gfa_var_array_create(gfa_symbol_table *table,
                                     const char *name, gfa_var_type elem_type,
-                                    int num_dims, os_int32 *dim_sizes);
+                                    int num_dims, os_int32 *dim_sizes,
+                                    os_int32 base);
 
 /*
  * gfa_var_array_get_element - Retourne un pointeur vers l'element
@@ -512,6 +592,13 @@ void *gfa_var_array_get_element(gfa_variable *var, int *indices);
  * gfa_var_array_fill - Remplit un tableau avec une valeur (ARRAYFILL).
  */
 void gfa_var_array_fill(gfa_variable *var, double value);
+
+/*
+ * gfa_array_quicksort / gfa_array_shellsort - Tries de tableaux
+ * doubles in place sur la tranche [lo, hi] (bornes incluses).
+ */
+void gfa_array_quicksort(double *arr, int lo, int hi);
+void gfa_array_shellsort(double *arr, int lo, int hi);
 
 /*
  * gfa_var_array_count - Retourne le nombre d'elements (DIM?).
@@ -582,6 +669,8 @@ void gfa_value_push_word(gfa_runtime *rt, os_int16 value);
 void gfa_value_push_long(gfa_runtime *rt, os_int32 value);
 void gfa_value_push_float(gfa_runtime *rt, double value);
 void gfa_value_push_string(gfa_runtime *rt, char *str, int owns);
+void gfa_value_push_string_len(gfa_runtime *rt, char *str,
+                               os_int32 len, int owns);
 void gfa_value_push_addr(gfa_runtime *rt, void *addr);
 gfa_value *gfa_value_pop(gfa_runtime *rt);
 gfa_value *gfa_value_peek(gfa_runtime *rt, int depth);

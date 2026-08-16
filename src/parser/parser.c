@@ -10,9 +10,11 @@
 #include "parser.h"
 #include "keywords.h"
 #include "os_layer.h"
+#include "matrix.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 /* ------------------------------------------------------------------ */
 /* Macros et forward declarations                                     */
@@ -32,6 +34,17 @@ static ast_node *parse_for(gfa_parser *parser);
 static ast_node *parse_while(gfa_parser *parser);
 static ast_node *parse_repeat(gfa_parser *parser);
 static ast_node *parse_do_loop(gfa_parser *parser);
+static ast_node *parse_builtin_call(gfa_parser *parser,
+                                    gfa_token_type func_tok);
+static ast_node *parse_mat(gfa_parser *parser);
+static ast_node *parse_matrix_name(gfa_parser *parser);
+static int parse_gfx_args(gfa_parser *parser, ast_node *node,
+                          int max);
+static ast_node *parse_exit_if(gfa_parser *parser);
+static ast_node *parse_line_input_file(gfa_parser *parser);
+static ast_node *parse_aes_stmt(gfa_parser *parser,
+                               gfa_token_type tok);
+static int parse_ident_is(const char *s, const char *w);
 static ast_node *parse_select(gfa_parser *parser);
 static ast_node *parse_print(gfa_parser *parser);
 static ast_node *parse_input(gfa_parser *parser);
@@ -41,6 +54,7 @@ static ast_node *parse_data(gfa_parser *parser);
 static ast_node *parse_procedure(gfa_parser *parser);
 static ast_node *parse_function(gfa_parser *parser);
 static ast_node *parse_deffn(gfa_parser *parser);
+static ast_node *parse_fn(gfa_parser *parser);
 static ast_node *parse_sound_stmt(gfa_parser *parser);
 static ast_node *parse_graphics(gfa_parser *parser);
 static ast_node *parse_comparison(gfa_parser *parser);
@@ -182,7 +196,11 @@ static ast_node *parse_line(gfa_parser *parser)
             ast_add_child(line, stmt);
         }
 
-        /* Une seule instruction par ligne (GFA Basic 3.5 original) */
+        /* Separateur ":" entre instructions sur la meme ligne */
+        if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+            gfa_lexer_next(parser->lexer);
+            continue;
+        }
         break;
     }
 
@@ -246,6 +264,579 @@ static ast_node *parse_statement(gfa_parser *parser)
         case TOK_WHILE:   return parse_while(parser);
         case TOK_REPEAT:  return parse_repeat(parser);
         case TOK_DO:      return parse_do_loop(parser);
+        case TOK_EXIT_IF: return parse_exit_if(parser);
+        case TOK_CONT:
+            /* CONT : reprise apres STOP (no-op en mode script) */
+            gfa_lexer_next(parser->lexer);
+            return ast_create_int(AST_CALL, 0);
+
+        /* ============================================================ */
+        /* System de fichiers                                           */
+        /* ============================================================ */
+        case TOK_KILL: case TOK_MKDIR: case TOK_RMDIR: case TOK_CHDIR:
+        case TOK_CHDRIVE: case TOK_FILES:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
+        case TOK_FGETDTA:
+            return parse_builtin_call(parser, tok);
+        case TOK_FSETDTA:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
+        case TOK_SEEK: case TOK_RELSEEK:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH)
+                    gfa_lexer_next(parser->lexer);
+                ast_add_arg(node, parse_expression(parser));
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                    ast_add_arg(node, parse_expression(parser));
+                }
+                return node;
+            }
+        case TOK_NAME:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);  /* NAME */
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)TOK_NAME;
+                ast_add_arg(node, parse_expression(parser));  /* ancien */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER &&
+                    parse_ident_is(parser->lexer->current.value.ident_name,
+                                   "AS"))
+                    gfa_lexer_next(parser->lexer);  /* AS */
+                ast_add_arg(node, parse_expression(parser));  /* nouveau */
+                return node;
+            }
+        case TOK_FIELD:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);  /* FIELD */
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)TOK_FIELD;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH)
+                    gfa_lexer_next(parser->lexer);
+                ast_add_arg(node, parse_expression(parser));  /* canal */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+                    gfa_lexer_next(parser->lexer);
+                ast_add_arg(node, parse_expression(parser));  /* taille */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER &&
+                    parse_ident_is(parser->lexer->current.value.ident_name,
+                                   "AS"))
+                    gfa_lexer_next(parser->lexer);  /* AS */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                    ast_add_arg(node, ast_create_str(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name));
+                    gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
+        case TOK_LSET: case TOK_RSET:
+            {
+                /* LSET/RSET var$ = expr : assignation simple
+                   (l'alignement ne s'applique qu'avec FIELD) */
+                ast_node *ident, *assign;
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                    ident = ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name);
+                    gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_EQ) {
+                        gfa_lexer_next(parser->lexer);
+                        assign = ast_create(AST_ASSIGN);
+                        assign->left = ident;
+                        assign->left->right = parse_expression(parser);
+                        return assign;
+                    }
+                }
+                return ast_create_int(AST_CALL, 0);
+            }
+        case TOK_SGET: case TOK_SPUT:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH)
+                    gfa_lexer_next(parser->lexer);
+                ast_add_arg(node, parse_expression(parser));  /* canal */
+                if (tok == TOK_SPUT &&
+                    gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                    ast_add_arg(node, parse_expression(parser));
+                }
+                return node;
+            }
+
+        /* ============================================================ */
+        /* Console + tableaux (tri / INSERT / DELETE)                    */
+        /* ============================================================ */
+        case TOK_VTAB: case TOK_HTAB:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
+        case TOK_QSORT: case TOK_SSORT:
+            {
+                ast_node *node, *ident;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_QSORT_STMT);
+                node->value.int_val = (tok == TOK_SSORT) ? 1 : 0;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                    ident = ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name);
+                    gfa_lexer_next(parser->lexer);
+                    node->left = ident;
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+                        gfa_lexer_next(parser->lexer);
+                        if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                            gfa_lexer_next(parser->lexer);
+                    }
+                }
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+                    gfa_lexer_next(parser->lexer);
+                node->body = parse_expression(parser);   /* lo */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+                    gfa_lexer_next(parser->lexer);
+                node->cond = parse_expression(parser);   /* hi */
+                return node;
+            }
+        case TOK_INSERT:
+            {
+                ast_node *node, *ident;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_INSERT_ELEM);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER &&
+                    gfa_lexer_peek_token(parser->lexer) == TOK_LPAREN) {
+                    ident = ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name);
+                    gfa_lexer_next(parser->lexer);
+                    node->left = ident;
+                    gfa_lexer_next(parser->lexer);  /* ( */
+                    node->body = parse_expression(parser);   /* idx */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                        gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                    node->cond = parse_expression(parser);   /* val */
+                    return node;
+                }
+                return parse_builtin_call(parser, TOK_INSERT);
+            }
+        case TOK_DELETE:
+            {
+                ast_node *node, *ident;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_DELETE_ELEM);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER &&
+                    gfa_lexer_peek_token(parser->lexer) == TOK_LPAREN) {
+                    ident = ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name);
+                    gfa_lexer_next(parser->lexer);
+                    node->left = ident;
+                    gfa_lexer_next(parser->lexer);  /* ( */
+                    node->body = parse_expression(parser);   /* idx */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                        gfa_lexer_next(parser->lexer);
+                    return node;
+                }
+                return ast_create_int(AST_CALL, 0);
+            }
+
+        /* ============================================================ */
+        /* Turtle (DRAW) et matrices (MAT)                               */
+        /* ============================================================ */
+        case TOK_DRAW:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_DRAW);
+                node->value.int_val = 0;  /* turtle */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+                    /* fonction DRAW(n) : interrogation */
+                    gfa_lexer_next(parser->lexer);
+                    node->body = parse_expression(parser);
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                        gfa_lexer_next(parser->lexer);
+                    node->value.int_val = 1;
+                } else {
+                    node->body = parse_expression(parser);
+                }
+                return node;
+            }
+        case TOK_MAT:
+            return parse_mat(parser);
+
+        /* ============================================================ */
+        /* Graphismes VDI etendus (emulation ANSI)                       */
+        /* Modes GFX_STMT : 10=aline 11=hline 12=rbox 13=pellipse       */
+        /*   14=plot 15=fill 16=texte 17=achr 18=setcolor 19=mode       */
+        /*   20=polyligne 21=polygone 22=bezier 23=polymark 24=clip     */
+        /*   25=getbit 26=putbit                                        */
+        /* Les arguments sont stockes dans args[] (ordre source).       */
+        /* ============================================================ */
+        case TOK_ALINE:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)10;
+                parse_gfx_args(parser, node, 4);
+                return node;
+            }
+        case TOK_HLINE:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)11;
+                parse_gfx_args(parser, node, 3);
+                return node;
+            }
+        case TOK_RBOX: case TOK_PRBOX:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)12;
+                parse_gfx_args(parser, node, 4);
+                return node;
+            }
+        case TOK_PELLIPSE:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)13;
+                parse_gfx_args(parser, node, 6);
+                return node;
+            }
+        case TOK_POLYLINE: case TOK_POLYFILL: case TOK_POLYMARK:
+        case TOK_APOLY: case TOK_CURVE:
+            {
+                ast_node *node;
+                int mode;
+                gfa_lexer_next(parser->lexer);
+                if (tok == TOK_POLYLINE || tok == TOK_APOLY) mode = 20;
+                else if (tok == TOK_POLYFILL) mode = 21;
+                else if (tok == TOK_CURVE) mode = 22;
+                else mode = 23;
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)mode;
+                ast_add_arg(node, parse_expression(parser));  /* n */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                    ast_add_arg(node, parse_matrix_name(parser));  /* pts */
+                }
+                return node;
+            }
+        case TOK_PLOT:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)14;
+                parse_gfx_args(parser, node, 2);
+                return node;
+            }
+        case TOK_FILL:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)15;
+                parse_gfx_args(parser, node, 3);
+                return node;
+            }
+        case TOK_ATEXT: case TOK_TEXT:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                /* "TEXT" seul : retour en mode texte (mode 0) */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_EOL ||
+                    gfa_lexer_current_token(parser->lexer) == TOK_EOF ||
+                    gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                    node = ast_create(AST_GFX_STMT);
+                    node->value.int_val = (long)19;
+                    ast_add_arg(node, ast_create_int(AST_ASSIGN, 0));
+                    return node;
+                }
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)16;
+                parse_gfx_args(parser, node, 3);
+                return node;
+            }
+        case TOK_ACHAR:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)17;
+                parse_gfx_args(parser, node, 3);
+                return node;
+            }
+        case TOK_SETCOLOR:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)18;
+                parse_gfx_args(parser, node, 2);
+                return node;
+            }
+        case TOK_MODE:
+        case TOK_GRAPHICS:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)19;
+                parse_gfx_args(parser, node, 1);
+                return node;
+            }
+        case TOK_CLIP: case TOK_ACLIP:
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)24;
+                parse_gfx_args(parser, node, 4);
+                return node;
+            }
+        case TOK_GET:
+            /* GET #n[, pos] (fichier) vs GET x1,y1,x2,y2,var$ (graphisme).
+               GET est consomme d'abord (un peek avant laisserait un
+               token en reserve et casserait la suite). */
+            {
+                gfa_lexer_next(parser->lexer);  /* GET */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
+                    ast_node *node;
+                    gfa_lexer_next(parser->lexer);  /* # */
+                    node = ast_create(AST_CALL);
+                    node->value.int_val = (long)TOK_GET;
+                    ast_add_arg(node, parse_expression(parser));  /* canal */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_arg(node, parse_expression(parser));  /* pos */
+                    }
+                    return node;
+                }
+                {
+                    ast_node *node;
+                    node = ast_create(AST_GFX_STMT);
+                    node->value.int_val = (long)25;
+                    parse_gfx_args(parser, node, 5);
+                    return node;
+                }
+            }
+        case TOK_PUT:
+            /* PUT #n (fichier) vs PUT x,y,var$[,mode] (graphisme) */
+            {
+                gfa_lexer_next(parser->lexer);  /* PUT */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
+                    ast_node *node;
+                    gfa_lexer_next(parser->lexer);  /* # */
+                    node = ast_create(AST_CALL);
+                    node->value.int_val = (long)TOK_PUT;
+                    ast_add_arg(node, parse_expression(parser));  /* canal */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_arg(node, parse_expression(parser));  /* pos */
+                    }
+                    return node;
+                }
+                {
+                    ast_node *node;
+                    node = ast_create(AST_GFX_STMT);
+                    node->value.int_val = (long)26;
+                    parse_gfx_args(parser, node, 4);
+                    return node;
+                }
+            }
+        /* WINDOW (x0,y0), (x1,y1) : fenetre de coordonnees graphiques */
+        case TOK_WINDOW:
+            {
+                ast_node *node;
+                int i;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_GFX_STMT);
+                node->value.int_val = (long)27;
+                for (i = 0; i < 2; i++) {
+                    if (i > 0 &&
+                        gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_LPAREN)
+                        gfa_lexer_next(parser->lexer);
+                    ast_add_arg(node, parse_expression(parser));
+                    if (i < 2 &&
+                        gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA) {
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_arg(node, parse_expression(parser));
+                    }
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_RPAREN)
+                        gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
+
+        /* ============================================================ */
+        /* AES (GEM) : instructions FORM_x, MENU_x, WIND_x, APPL_x,      */
+        /* OBJC_x, RSRC_x — emulees par le runtime (resultat 0).        */
+        /* ============================================================ */
+        case TOK_APPL_INIT: case TOK_APPL_EXIT: case TOK_APPL_FIND:
+        case TOK_APPL_READ: case TOK_APPL_WRITE: case TOK_APPL_TPLAY:
+        case TOK_APPL_TRECORD:
+        case TOK_FORM_ALERT: case TOK_FORM_BUTTON: case TOK_FORM_CENTER:
+        case TOK_FORM_DIAL: case TOK_FORM_DO: case TOK_FORM_ERROR:
+        case TOK_FORM_KEYBD: case TOK_FORM_INPUT: case TOK_FORM_INPUT_AS:
+        case TOK_MENU_BAR: case TOK_MENU_ICHECK: case TOK_MENU_IENABLE:
+        case TOK_MENU_REGISTER: case TOK_MENU_TEXT: case TOK_MENU_TNORMAL:
+        case TOK_MENU_KILL: case TOK_MENU_OFF:
+        case TOK_WIND_OPEN: case TOK_WIND_CLOSE: case TOK_WIND_DELETE:
+        case TOK_WIND_FIND: case TOK_WIND_CREATE: case TOK_WIND_CALC:
+        case TOK_WIND_GET: case TOK_WIND_SET: case TOK_WIND_UPDATE:
+        case TOK_RSRC_LOAD: case TOK_RSRC_FREE: case TOK_RSRC_GADDR:
+        case TOK_RSRC_SADDR: case TOK_RSRC_OBFIX:
+        case TOK_OBJC_ADD: case TOK_OBJC_CHANGE: case TOK_OBJC_DELETE:
+        case TOK_OBJC_DRAW: case TOK_OBJC_EDIT: case TOK_OBJC_FIND:
+        case TOK_OBJC_OFFSET: case TOK_OBJC_ORDER: case TOK_OBJC_ADDMOVE:
+        case TOK_OBJC_MOVE: case TOK_OBJC_PICK: case TOK_OBJC_STATE:
+        case TOK_OBJC_TNORMAL:
+        case TOK_GRAF_DRAGBOX: case TOK_RC_COPY: case TOK_RC_INTERSECT:
+        case TOK_RCALL: case TOK_SCRP_READ: case TOK_SCRP_WRITE:
+        case TOK_ALERT: case TOK_FILESELECT: case TOK_FSEL_INPUT:
+        case TOK_EVNT_MULTI: case TOK_EVNT_MESAG: case TOK_EVNT_KEYBD:
+        case TOK_EVNT_MOUSE: case TOK_EVNT_BUTTON: case TOK_EVNT_TIMER:
+        case TOK_EVNT_DCLICK:
+            return parse_aes_stmt(parser, tok);
+
+        /* ============================================================ */
+        /* Fenetres GEM : CLEARW/TITLEW/INFOW/TOPW/GETSIZE/MW_OUT/…     */
+        /* sub-ops : 0=clearw 1=titlew 2=infow 3=topw 4=mwout           */
+        /*   5=getsize 6=windtab 7=setdraw 8=showm 9=hidem              */
+        /* GETSIZE : args[] = 5 identifiants (n,x,y,w,h)                */
+        /* Autres : args[] = expressions (ordre source)                 */
+        /* ============================================================ */
+        case TOK_CLEARW: case TOK_TITLEW: case TOK_INFOW: case TOK_TOPW:
+        case TOK_MW_OUT: case TOK_GETSIZE: case TOK_WINDTAB:
+        case TOK_SETDRAW: case TOK_SHOWM: case TOK_HIDEM:
+            {
+                ast_node *node;
+                int sub;
+                gfa_lexer_next(parser->lexer);
+                if (tok == TOK_CLEARW) sub = 0;
+                else if (tok == TOK_TITLEW) sub = 1;
+                else if (tok == TOK_INFOW) sub = 2;
+                else if (tok == TOK_TOPW) sub = 3;
+                else if (tok == TOK_MW_OUT) sub = 4;
+                else if (tok == TOK_GETSIZE) sub = 5;
+                else if (tok == TOK_WINDTAB) sub = 6;
+                else if (tok == TOK_SETDRAW) sub = 7;
+                else if (tok == TOK_SHOWM) sub = 8;
+                else sub = 9;
+                node = ast_create(AST_WINDOW);
+                node->value.int_val = (long)sub;
+                if (sub == 5) {
+                    /* GETSIZE n,x,y,w,h : 5 variables cibles */
+                    int i;
+                    for (i = 0; i < 5; i++) {
+                        if (i > 0 &&
+                            gfa_lexer_current_token(parser->lexer) ==
+                            TOK_COMMA)
+                            gfa_lexer_next(parser->lexer);
+                        if (gfa_lexer_current_token(parser->lexer) ==
+                            TOK_IDENTIFIER) {
+                            ast_add_arg(node, ast_create_ident(AST_ASSIGN,
+                                parser->lexer->current.value.ident_name));
+                            gfa_lexer_next(parser->lexer);
+                        }
+                    }
+                } else {
+                    ast_add_arg(node, parse_expression(parser));
+                    while (gfa_lexer_current_token(parser->lexer) ==
+                           TOK_COMMA) {
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_arg(node, parse_expression(parser));
+                    }
+                }
+                return node;
+            }
+
+        /* ============================================================ */
+        /* Directives sans effet (parsing valide, execution no-op)      */
+        /* ============================================================ */
+        case TOK_CLR:
+            {
+                ast_node *n;
+                gfa_lexer_next(parser->lexer);
+                n = ast_create(AST_CLEAR);
+                return n;
+            }
+        case TOK_DEFBIT: case TOK_DEFBYT: case TOK_DEFWRD:
+        case TOK_DEFNUM: case TOK_DEFFLT: case TOK_DEFSTR:
+        case TOK_DEFDBL:
+            {
+                /* DEFxxx l1-l2 : declarations de type (ignorees,
+                   les types GFA sont determines par le suffixe) */
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) ==
+                    TOK_INTEGER) {
+                    ast_node *lo = parse_expression(parser);
+                    (void)lo;
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_MINUS)
+                        gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_INTEGER)
+                        parse_expression(parser);
+                }
+                return ast_create_int(AST_CALL, 0);
+            }
+        case TOK_DEBUG: case TOK_RESERVE: case TOK_BASEPAGE:
+        case TOK_ABSOLUTE: case TOK_DMACONTROL: case TOK_DMASOUND:
+        case TOK_EXEC: case TOK_LLIST: case TOK_MERGE: case TOK_RENUM:
+        case TOK_AUTO:
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                /* arguments optionnels (ex: DMACONTROL 0) */
+                while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_COLON) {
+                    ast_add_arg(node, parse_expression(parser));
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                    else
+                        break;
+                }
+                return node;
+            }
+
         case TOK_SELECT:  return parse_select(parser);
         case TOK_GOTO:
             {
@@ -312,8 +903,16 @@ static ast_node *parse_statement(gfa_parser *parser)
             gfa_lexer_next(parser->lexer);
             return ast_create(AST_END);
         case TOK_QUIT:
-            gfa_lexer_next(parser->lexer);
-            return ast_create(AST_QUIT);
+            {
+                ast_node *node;
+                node = ast_create(AST_QUIT);
+                gfa_lexer_next(parser->lexer);
+                /* Code de sortie optionnel : QUIT n */
+                if (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_EOF)
+                    node->left = parse_expression(parser);
+                return node;
+            }
 
         /* I/O */
         case TOK_PRINT:    return parse_print(parser);
@@ -381,17 +980,35 @@ static ast_node *parse_statement(gfa_parser *parser)
         /* Definitions */
         case TOK_DIM:      return parse_dim(parser);
         case TOK_ERASE:
-            gfa_lexer_next(parser->lexer);
-            return ast_create(AST_ERASE);
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_ERASE);
+                while (gfa_lexer_current_token(parser->lexer) ==
+                       TOK_IDENTIFIER) {
+                    ast_add_child(node, ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name));
+                    gfa_lexer_next(parser->lexer);
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                }
+                return node;
+            }
         case TOK_CLEAR:
             gfa_lexer_next(parser->lexer);
             return ast_create(AST_CLEAR);
         case TOK_PROCEDURE: return parse_procedure(parser);
+        case TOK_PROC:      return parse_procedure(parser);
         case TOK_FUNCTION:  return parse_function(parser);
         case TOK_DEFFN:     return parse_deffn(parser);
+        case TOK_FN:        return parse_fn(parser);
         case TOK_ENDFUNC:
             gfa_lexer_next(parser->lexer);
             return ast_create(AST_ENDFUNC);
+        case TOK_ENDPROC:
+            gfa_lexer_next(parser->lexer);
+            return ast_create_int(AST_CALL, 0);
         case TOK_DATA:     return parse_data(parser);
         case TOK_READ:
             {
@@ -499,6 +1116,19 @@ static ast_node *parse_statement(gfa_parser *parser)
                     }
                     return node;
                 }
+                if (gfa_lexer_current_token(parser->lexer) == TOK_KEY) {
+                    /* ON KEY GOSUB n : activateur de handler touches */
+                    ast_node *node;
+                    node = ast_create(AST_CALL);
+                    node->value.int_val = (long)TOK_ON_KEY;
+                    gfa_lexer_next(parser->lexer);  /* consommer KEY */
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_GOSUB) {
+                        gfa_lexer_next(parser->lexer);
+                        ast_add_arg(node, parse_expression(parser));
+                    }
+                    return node;
+                }
                 if (gfa_lexer_current_token(parser->lexer) == TOK_ON_BREAK) {
                     ast_node *node;
                     node = ast_create(AST_ON_BREAK);
@@ -509,6 +1139,10 @@ static ast_node *parse_statement(gfa_parser *parser)
                             ast_add_child(node, ast_create_ident(AST_ASSIGN,
                                 parser->lexer->current.value.ident_name));
                         }
+                        gfa_lexer_next(parser->lexer);
+                    } else if (gfa_lexer_current_token(parser->lexer) ==
+                               TOK_CONT) {
+                        /* ON BREAK CONT : continue apres Ctrl+C */
                         gfa_lexer_next(parser->lexer);
                     }
                     return node;
@@ -563,6 +1197,29 @@ static ast_node *parse_statement(gfa_parser *parser)
                 return node;
             }
         case TOK_LINE_TOK:
+            /* "LINE INPUT [#n,] var$" (console/fichier) ou
+               "LINE x1,y1,x2,y2[,...]" (graphisme VDI).
+               LINE est consomme d'abord : un peek avant casserait
+               la consommation suivante de parse_graphics. */
+            {
+                gfa_lexer_next(parser->lexer);  /* LINE */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_INPUT)
+                    return parse_line_input_file(parser);
+                {
+                    ast_node *node;
+                    node = ast_create(AST_LINE);
+                    while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                           gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+                        ast_add_child(node, parse_expression(parser));
+                        if (gfa_lexer_current_token(parser->lexer) ==
+                            TOK_COMMA)
+                            gfa_lexer_next(parser->lexer);
+                        else
+                            break;
+                    }
+                    return node;
+                }
+            }
         case TOK_BOX:
         case TOK_PBOX:
         case TOK_CIRCLE_TOK:
@@ -727,6 +1384,15 @@ static ast_node *parse_statement(gfa_parser *parser)
             {
                 ast_node *ident;
                 ast_node *assign;
+                /* DEF FN nom(...) = expr : forme alternative de FN */
+                if (parse_ident_is(parser->lexer->current.value.ident_name,
+                                   "DEF")) {
+                    gfa_lexer_next(parser->lexer);  /* consommer DEF */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_FN)
+                        return parse_fn(parser);
+                    /* DEF sans FN : instruction inconnue, no-op tolerant */
+                    return ast_create_int(AST_CALL, 0);
+                }
                 ident = ast_create_ident(AST_ASSIGN,
                     parser->lexer->current.value.ident_name);
                 gfa_lexer_next(parser->lexer);
@@ -838,22 +1504,101 @@ static ast_node *parse_statement(gfa_parser *parser)
         case TOK_CHAIN:
         case TOK_RUN:
         case TOK_NEW:
-            gfa_lexer_next(parser->lexer);
-            return ast_create_int(AST_CALL, 0);
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                /* SYSTEM "cmd" / CHAIN "prog" : argument optionnel */
+                if (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_COLON)
+                    ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
 
         case TOK_PAUSE:
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)TOK_PAUSE;
+                gfa_lexer_next(parser->lexer);
+                /* PAUSE [n] : argument optionnel */
+                if (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_COLON)
+                    ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
         case TOK_DELAY:
             {
                 ast_node *node;
-                node = ast_create((tok == TOK_PAUSE) ? AST_CALL : AST_CALL);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
                 gfa_lexer_next(parser->lexer);
-                ast_add_child(node, parse_expression(parser));
+                ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
+
+        /* KEY n, chaine$ : defini un buffer de touches (emule : le
+           runtime conserve la derniere definition). */
+        case TOK_KEY:
+        /* CONOUT / CONOUTI chaine$ : ecriture console sans saut de ligne */
+        case TOK_CONOUT:
+        case TOK_CONOUTI:
+        /* CONIN : lit un caractere console (fonction et instruction) */
+        case TOK_CONIN:
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                    gfa_lexer_current_token(parser->lexer) != TOK_COLON)
+                    ast_add_arg(node, parse_expression(parser));
+                if (tok == TOK_KEY &&
+                    gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                    gfa_lexer_next(parser->lexer);
+                    ast_add_arg(node, parse_expression(parser));
+                }
+                return node;
+            }
+
+        case TOK_KEYPRESS:
+        case TOK_KEYPAD:
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+                    gfa_lexer_next(parser->lexer);
+                    while (gfa_lexer_current_token(parser->lexer) != TOK_RPAREN &&
+                           gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+                        ast_add_arg(node, parse_expression(parser));
+                        if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                            gfa_lexer_next(parser->lexer);
+                        }
+                    }
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN) {
+                        gfa_lexer_next(parser->lexer);
+                    }
+                }
+                return node;
+            }
+
+        case TOK_RANDOMIZE:
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                ast_add_arg(node, parse_expression(parser));
                 return node;
             }
 
         case TOK_ARRAYFILL:
-        case TOK_RANDOMIZE:
-        case TOK_OPTION_BASE:
             {
                 ast_node *node;
                 node = ast_create_int(AST_CALL, 0);
@@ -867,6 +1612,23 @@ static ast_node *parse_statement(gfa_parser *parser)
                         break;
                     }
                 }
+                return node;
+            }
+
+        case TOK_OPTION_BASE:
+            {
+                ast_node *node;
+                ast_node *expr;
+                node = ast_create(AST_OPTION_BASE);
+                gfa_lexer_next(parser->lexer);  /* OPTION */
+                /* "BASE" facultatif (GFA : OPTION BASE 0/1, OPTION 0/1) */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER &&
+                    parse_ident_is(parser->lexer->current.value.ident_name,
+                                   "BASE")) {
+                    gfa_lexer_next(parser->lexer);
+                }
+                expr = parse_expression(parser);
+                node->left = expr;
                 return node;
             }
 
@@ -984,8 +1746,23 @@ static ast_node *parse_statement(gfa_parser *parser)
             }
         case TOK_BMOVE:
         case TOK_MSHRINK:
-            gfa_lexer_next(parser->lexer);
-            return ast_create_int(AST_CALL, 0);
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_COLON) {
+                    ast_add_arg(node, parse_expression(parser));
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                    else
+                        break;
+                }
+                return node;
+            }
 
         case TOK_DUMP:
         case TOK_STORE:
@@ -993,8 +1770,23 @@ static ast_node *parse_statement(gfa_parser *parser)
         case TOK_PSAVE:
         case TOK_HARDCOPY:
         case TOK_KEYDEF:
-            gfa_lexer_next(parser->lexer);
-            return ast_create_int(AST_CALL, 0);
+            {
+                ast_node *node;
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)tok;
+                gfa_lexer_next(parser->lexer);
+                while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_COLON) {
+                    ast_add_arg(node, parse_expression(parser));
+                    if (gfa_lexer_current_token(parser->lexer) ==
+                        TOK_COMMA)
+                        gfa_lexer_next(parser->lexer);
+                    else
+                        break;
+                }
+                return node;
+            }
 
         default:
             fprintf(stderr, "PARSE_ERR: tok=%d name=%s line=%d\n", (int)tok, gfa_keyword_get_name(tok), gfa_lexer_get_line(parser->lexer));
@@ -1083,6 +1875,193 @@ static ast_node *parse_if(gfa_parser *parser)
 }
 
 /* ------------------------------------------------------------------ */
+/* MAT (GFA 8.6)                                                      */
+/* ------------------------------------------------------------------ */
+
+/* Nom de matrice : identifiant, eventuellement suivi de (r,c) ou
+   d'index (ignorees : les dimensions viennent du DIM). */
+static ast_node *parse_matrix_name(gfa_parser *parser)
+{
+    ast_node *n;
+
+    if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+        n = ast_create_ident(AST_ASSIGN,
+            parser->lexer->current.value.ident_name);
+        gfa_lexer_next(parser->lexer);
+        if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+            /* Consommer ( … ) sans l'enregistrer */
+            int depth = 0;
+            gfa_lexer_next(parser->lexer);
+            depth = 1;
+            while (depth > 0 &&
+                   gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                    depth++;
+                else if (gfa_lexer_current_token(parser->lexer) ==
+                         TOK_RPAREN)
+                    depth--;
+                gfa_lexer_next(parser->lexer);
+            }
+        }
+        return n;
+    }
+    return ast_create(AST_ASSIGN);
+}
+
+/*
+ * parse_mat - Instruction MAT (GFA 8.6).
+ *   MAT READ a | MAT INPUT a | MAT PRINT a
+ *   MAT CLR a  | MAT ONE a
+ *   MAT a = b | MAT a = b + c | MAT a = b - c | MAT a = b * c
+ *   MAT a = TRN(b) | MAT a = INV(b) | MAT a = val
+ *   MAT DET(a) | MAT QDET(a) | MAT RANG(a) | MAT NORM(a)
+ *   MAT BASE = n
+ */
+static ast_node *parse_mat(gfa_parser *parser)
+{
+    ast_node *node;
+    gfa_token_type t;
+
+    gfa_lexer_next(parser->lexer);  /* MAT */
+    node = ast_create(AST_MAT);
+
+    t = gfa_lexer_current_token(parser->lexer);
+
+    if (t == TOK_READ) {
+        gfa_lexer_next(parser->lexer);
+        node->value.int_val = (long)MAT_OP_READ;
+        node->left = parse_matrix_name(parser);
+        return node;
+    }
+    if (t == TOK_INPUT) {
+        gfa_lexer_next(parser->lexer);
+        node->value.int_val = (long)MAT_OP_INPUT;
+        node->left = parse_matrix_name(parser);
+        return node;
+    }
+    if (t == TOK_PRINT) {
+        gfa_lexer_next(parser->lexer);
+        node->value.int_val = (long)MAT_OP_PRINT;
+        node->left = parse_matrix_name(parser);
+        return node;
+    }
+    if (t == TOK_CLR) {
+        gfa_lexer_next(parser->lexer);
+        node->value.int_val = (long)MAT_OP_CLR;
+        node->left = parse_matrix_name(parser);
+        return node;
+    }
+    if (t == TOK_IDENTIFIER) {
+        const char *name;
+        name = parser->lexer->current.value.ident_name;
+        if (parse_ident_is(name, "CLR")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_CLR;
+            node->left = parse_matrix_name(parser);
+            return node;
+        }
+        if (parse_ident_is(name, "ONE")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_ONE;
+            node->left = parse_matrix_name(parser);
+            return node;
+        }
+        if (parse_ident_is(name, "BASE")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_BASE;
+            if (gfa_lexer_current_token(parser->lexer) == TOK_EQ)
+                gfa_lexer_next(parser->lexer);
+            node->step = parse_expression(parser);
+            return node;
+        }
+        if (parse_ident_is(name, "DET") || parse_ident_is(name, "QDET")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_DET;
+            if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                gfa_lexer_next(parser->lexer);
+            node->body = parse_matrix_name(parser);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                gfa_lexer_next(parser->lexer);
+            return node;
+        }
+        if (parse_ident_is(name, "RANG")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_RANG;
+            if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                gfa_lexer_next(parser->lexer);
+            node->body = parse_matrix_name(parser);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                gfa_lexer_next(parser->lexer);
+            return node;
+        }
+        if (parse_ident_is(name, "NORM")) {
+            gfa_lexer_next(parser->lexer);
+            node->value.int_val = (long)MAT_OP_NORM;
+            if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                gfa_lexer_next(parser->lexer);
+            node->body = parse_matrix_name(parser);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                gfa_lexer_next(parser->lexer);
+            return node;
+        }
+    }
+
+    /* MAT a = … */
+    node->left = parse_matrix_name(parser);
+    if (gfa_lexer_current_token(parser->lexer) == TOK_EQ) {
+        gfa_lexer_next(parser->lexer);
+        t = gfa_lexer_current_token(parser->lexer);
+        if (t == TOK_IDENTIFIER) {
+            const char *rname;
+            rname = parser->lexer->current.value.ident_name;
+            if (parse_ident_is(rname, "TRN") ||
+                parse_ident_is(rname, "TRANS")) {
+                gfa_lexer_next(parser->lexer);
+                node->value.int_val = (long)MAT_OP_TRANS;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                    gfa_lexer_next(parser->lexer);
+                node->body = parse_matrix_name(parser);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                    gfa_lexer_next(parser->lexer);
+                return node;
+            }
+            if (parse_ident_is(rname, "INV")) {
+                gfa_lexer_next(parser->lexer);
+                node->value.int_val = (long)MAT_OP_INV;
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                    gfa_lexer_next(parser->lexer);
+                node->body = parse_matrix_name(parser);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                    gfa_lexer_next(parser->lexer);
+                return node;
+            }
+            node->body = parse_matrix_name(parser);
+            t = gfa_lexer_current_token(parser->lexer);
+            if (t == TOK_PLUS) {
+                gfa_lexer_next(parser->lexer);
+                node->value.int_val = (long)MAT_OP_ADD;
+                node->cond = parse_matrix_name(parser);
+            } else if (t == TOK_MINUS) {
+                gfa_lexer_next(parser->lexer);
+                node->value.int_val = (long)MAT_OP_SUB;
+                node->cond = parse_matrix_name(parser);
+            } else if (t == TOK_STAR) {
+                gfa_lexer_next(parser->lexer);
+                node->value.int_val = (long)MAT_OP_MUL;
+                node->cond = parse_matrix_name(parser);
+            } else {
+                node->value.int_val = (long)MAT_OP_CPY;
+            }
+            return node;
+        }
+        node->value.int_val = (long)MAT_OP_SET;
+        node->step = parse_expression(parser);
+        return node;
+    }
+    return node;
+}
+
+/* ------------------------------------------------------------------ */
 /* FOR var = start TO end [STEP s] ... NEXT                           */
 /* ------------------------------------------------------------------ */
 
@@ -1111,9 +2090,12 @@ static ast_node *parse_for(gfa_parser *parser)
     /* Valeur de depart */
     ast_add_child(node, parse_expression(parser));
 
-    /* TO */
+    /* TO ou DOWNTO */
     if (gfa_lexer_current_token(parser->lexer) == TOK_TO) {
         gfa_lexer_next(parser->lexer);
+    } else if (gfa_lexer_current_token(parser->lexer) == TOK_DOWNTO) {
+        gfa_lexer_next(parser->lexer);
+        node->value.int_val = 1;  /* sens decroissant (pas = -1) */
     }
     ast_add_child(node, parse_expression(parser));
 
@@ -1192,6 +2174,84 @@ static ast_node *parse_repeat(gfa_parser *parser)
 /* DO ... LOOP [WHILE|UNTIL cond]                                     */
 /* ------------------------------------------------------------------ */
 
+/* Identifiant identique a un mot (insensible a la casse) */
+static int parse_ident_is(const char *s, const char *w)
+{
+    if (s == NULL) return 0;
+    while (*s && *w) {
+        if (toupper((unsigned char)*s) != toupper((unsigned char)*w))
+            return 0;
+        s++;
+        w++;
+    }
+    return (*s == '\0' && *w == '\0');
+}
+
+/*
+ * parse_aes_stmt - Instruction AES generique (FORM_*, MENU_*, WIND_*,
+ * APPL_*, OBJC_*, RSRC_*, …) : arguments = expressions separees par
+ * des virgules jusqu'a la fin de ligne. Le runtime emule l'appel
+ * (resultat 0).
+ */
+static ast_node *parse_aes_stmt(gfa_parser *parser, gfa_token_type tok)
+{
+    ast_node *node;
+
+    gfa_lexer_next(parser->lexer);  /* consommer le mot cle AES */
+    node = ast_create(AST_CALL);
+    node->value.int_val = (long)tok;
+    while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+           gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+        ast_add_arg(node, parse_expression(parser));
+        if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+            gfa_lexer_next(parser->lexer);
+        else
+            break;
+    }
+    return node;
+}
+
+/*
+ * parse_line_input_file - LINE INPUT [#n,] var$
+ *   sans #n : console (comportement historique)
+ *   avec #n : lecture d'une ligne depuis le canal fichier n
+ */
+static ast_node *parse_line_input_file(gfa_parser *parser)
+{
+    ast_node *node;
+
+    gfa_lexer_next(parser->lexer);  /* INPUT (LINE deja consomme) */
+    node = ast_create(AST_LINE_INPUT);
+
+    /* Optionnel : #n , */
+    if (gfa_lexer_current_token(parser->lexer) == TOK_HASH) {
+        gfa_lexer_next(parser->lexer);
+        node->cond = parse_expression(parser);
+        if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA)
+            gfa_lexer_next(parser->lexer);
+    }
+
+    if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+        ast_add_child(node,
+            ast_create_ident(AST_ASSIGN,
+                parser->lexer->current.value.ident_name));
+    }
+    return node;
+}
+
+static ast_node *parse_exit_if(gfa_parser *parser)
+{
+
+    ast_node *node;
+    node = ast_create(AST_EXIT_IF);
+    gfa_lexer_next(parser->lexer);  /* EXIT */
+    if (gfa_lexer_current_token(parser->lexer) == TOK_IF) {
+        gfa_lexer_next(parser->lexer);
+        ast_set_cond(node, parse_expression(parser));
+    }
+    return node;
+}
+
 static ast_node *parse_do_loop(gfa_parser *parser)
 {
     ast_node *node;
@@ -1205,17 +2265,18 @@ static ast_node *parse_do_loop(gfa_parser *parser)
             /* WHILE ou UNTIL optionnel */
             if (gfa_lexer_current_token(parser->lexer) == TOK_WHILE ||
                 gfa_lexer_current_token(parser->lexer) == TOK_UNTIL) {
+                int is_until;
+                is_until = (gfa_lexer_current_token(parser->lexer)
+                            == TOK_UNTIL) ? 1 : 0;
                 gfa_lexer_next(parser->lexer);
+                /* 0 = LOOP WHILE, 1 = LOOP UNTIL (codegen) */
+                node->value.int_val = (long)is_until;
                 ast_set_cond(node, parse_expression(parser));
             }
             break;
         }
         if (gfa_lexer_current_token(parser->lexer) == TOK_EXIT_IF) {
-            ast_node *exit_node;
-            exit_node = ast_create(AST_EXIT_IF);
-            gfa_lexer_next(parser->lexer);
-            ast_set_cond(exit_node, parse_expression(parser));
-            ast_add_child(body, exit_node);
+            ast_add_child(body, parse_exit_if(parser));
             continue;
         }
         ast_add_child(body, parse_line(parser));
@@ -1577,7 +2638,8 @@ static ast_node *parse_procedure(gfa_parser *parser)
     }    /* Corps */
     body = ast_create(AST_STATEMENT_LIST);
     while (gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
-        if (gfa_lexer_current_token(parser->lexer) == TOK_RETURN) {
+        if (gfa_lexer_current_token(parser->lexer) == TOK_RETURN ||
+            gfa_lexer_current_token(parser->lexer) == TOK_ENDPROC) {
             ast_add_child(body, ast_create(AST_RETURN));
             gfa_lexer_next(parser->lexer);
             break;
@@ -1716,6 +2778,87 @@ static ast_node *parse_deffn(gfa_parser *parser)
     }
     ast_set_body(node, parse_expression(parser));
 
+    return node;
+}
+
+/* ------------------------------------------------------------------ */
+/* FN nom[(args)] = expr  (forme inline)                               */
+/* FN nom[(args)] ... corps ... RETURN  (forme multi-lignes,           */
+/*    resultat = valeur de la variable nom)                            */
+/* ------------------------------------------------------------------ */
+
+static ast_node *parse_fn(gfa_parser *parser)
+{
+    ast_node *node;
+    ast_node *body;
+    int multiline = 0;
+
+    node = ast_create(AST_DEFFN);
+    gfa_lexer_next(parser->lexer);  /* FN */
+
+    /* Nom (stocke aussi le mode multi-lignes dans node->line) */
+    if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+        node->value.ident =
+            os_strdup(parser->lexer->current.value.ident_name);
+        node->has_ident = 1;
+        if (parser->label_count < 256 && node->value.ident) {
+            parser->labels[parser->label_count].name =
+                os_strdup(node->value.ident);
+            parser->labels[parser->label_count].ast_node_index = 0;
+            parser->label_count++;
+        }
+    }
+    gfa_lexer_next(parser->lexer);
+
+    /* (args) optionnels */
+    if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
+        gfa_lexer_next(parser->lexer);
+        while (gfa_lexer_current_token(parser->lexer) != TOK_RPAREN &&
+               gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+            if (gfa_lexer_current_token(parser->lexer) == TOK_IDENTIFIER) {
+                ast_add_child(node,
+                    ast_create_ident(AST_ASSIGN,
+                        parser->lexer->current.value.ident_name));
+            }
+            gfa_lexer_next(parser->lexer);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                gfa_lexer_next(parser->lexer);
+            }
+        }
+        if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN) {
+            gfa_lexer_next(parser->lexer);
+        }
+    }
+
+    if (gfa_lexer_current_token(parser->lexer) == TOK_EQ) {
+        /* Forme inline : FN nom(x) = expr */
+        gfa_lexer_next(parser->lexer);
+        ast_set_body(node, parse_expression(parser));
+    } else {
+        /* Forme multi-lignes : corps jusqu'a RETURN */
+        multiline = 1;
+        body = ast_create(AST_STATEMENT_LIST);
+        while (gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+            if (gfa_lexer_current_token(parser->lexer) == TOK_RETURN) {
+                ast_node *ret = ast_create(AST_DEFFN_RET);
+                if (node->has_ident && node->value.ident) {
+                    ret->value.ident = os_strdup(node->value.ident);
+                    ret->has_ident = 1;
+                }
+                ast_add_child(body, ret);
+                gfa_lexer_next(parser->lexer);
+                break;
+            }
+            if (gfa_lexer_current_token(parser->lexer) == TOK_PROCEDURE ||
+                gfa_lexer_current_token(parser->lexer) == TOK_FUNCTION ||
+                gfa_lexer_current_token(parser->lexer) == TOK_FN) {
+                break;
+            }
+            ast_add_child(body, parse_line(parser));
+        }
+        ast_set_body(node, body);
+    }
+    node->line = multiline ? 1 : 0;  /* flag multi-lignes (pas value.int_val) */
     return node;
 }
 
@@ -1908,7 +3051,8 @@ static ast_node *parse_factor(gfa_parser *parser)
     gfa_token_type op;
 
     op = gfa_lexer_current_token(parser->lexer);
-    if (op == TOK_MINUS || op == TOK_PLUS || op == TOK_NOT_OP) {
+    if (op == TOK_MINUS || op == TOK_PLUS || op == TOK_NOT_OP ||
+        op == TOK_TILDE) {
         ast_node *node;
         gfa_lexer_next(parser->lexer);
         node = ast_create(AST_ASSIGN);
@@ -1940,6 +3084,68 @@ static ast_node *parse_factor(gfa_parser *parser)
  *          | IDENTIFIER '(' args ')'
  *          | builtin_function '(' args ')'
  */
+/*
+ * parse_gfx_args - Collecte des expressions separees par virgules
+ * dans args[] (jusqu'a max). Utilise par les instructions graphiques.
+ */
+static int parse_gfx_args(gfa_parser *parser, ast_node *node, int max)
+{
+    int n;
+
+    ast_add_arg(node, parse_expression(parser));
+    n = 1;
+    while (n < max &&
+           gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+        gfa_lexer_next(parser->lexer);
+        ast_add_arg(node, parse_expression(parser));
+        n++;
+    }
+    return n;
+}
+
+/*
+ * parse_builtin_call - Appel de fonction integree generique.
+ * Consomme le mot-cle (deja positionne) puis les arguments entre
+ * parentheses ou accolades (optionnels). Reutilise pour les
+ * instructions-builtin (KILL, SEEK, SPUT, …).
+ */
+static ast_node *parse_builtin_call(gfa_parser *parser,
+                                    gfa_token_type func_tok)
+{
+    ast_node *call;
+
+    call = ast_create(AST_CALL);
+    call->value.int_val = (long)func_tok;
+    call->has_ident = 0;
+    call->has_str = 0;
+    gfa_lexer_next(parser->lexer);
+
+    {
+        gfa_token_type open_tok = gfa_lexer_current_token(parser->lexer);
+        gfa_token_type close_tok;
+
+        if (open_tok == TOK_LPAREN) {
+            close_tok = TOK_RPAREN;
+        } else if (open_tok == TOK_LBRACE) {
+            close_tok = TOK_RBRACE;
+        } else {
+            return call;
+        }
+        gfa_lexer_next(parser->lexer);
+        while (gfa_lexer_current_token(parser->lexer) != close_tok &&
+               gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
+            ast_add_arg(call, parse_expression(parser));
+            if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
+                gfa_lexer_next(parser->lexer);
+            }
+        }
+        if (gfa_lexer_current_token(parser->lexer) == close_tok) {
+            gfa_lexer_next(parser->lexer);
+        }
+    }
+    return call;
+}
+
 static ast_node *parse_primary(gfa_parser *parser)
 {
     gfa_token_type tok;
@@ -1980,6 +3186,18 @@ static ast_node *parse_primary(gfa_parser *parser)
                 ast_node *node;
                 gfa_lexer_next(parser->lexer);  /* consommer # */
                 node = parse_expression(parser);  /* le numero du canal */
+                return node;
+            }
+
+        case TOK_W_COLON:
+        case TOK_L_COLON:
+            {
+                /* W:expr / L:expr : passage de valeur word/long
+                   (argument d'appel XBIOS). Les valeurs internes etant
+                   sur 32 bits, le cast n'a pas d'effet a l'execution. */
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = parse_expression(parser);
                 return node;
             }
 
@@ -2069,6 +3287,7 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_INSTR: case TOK_RINSTR:
         case TOK_STRING_TOK: case TOK_SPACE_TOK:
         case TOK_TRIM_TOK: case TOK_UPPER_TOK: case TOK_LCASE_TOK:
+        case TOK_LOWER_TOK:
         case TOK_EOF_TOK: case TOK_LOF: case TOK_LOC:
         case TOK_TRUE: case TOK_FALSE: case TOK_PI_TOK:
         case TOK_MOUSEX: case TOK_MOUSEY: case TOK_MOUSEK:
@@ -2100,11 +3319,18 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_PRED: case TOK_SUCC:
         case TOK_DEG: case TOK_RAD:
         case TOK_SOUND: case TOK_MOUSE: case TOK_SETMOUSE:
+        case TOK_CONIN:
         case TOK_STICK: case TOK_STRIG:
+        case TOK_PADX: case TOK_PADY: case TOK_PADT:
+        case TOK_LPENX: case TOK_LPENY: case TOK_TOUCH:
         case TOK_KEYGET: case TOK_KEYLOOK: case TOK_KEYTEST:
+        case TOK_KEYPRESS: case TOK_KEYPAD:
         case TOK_CEIL_TOK: case TOK_TRUNC_TOK:
         case TOK_SINGLE: case TOK_DOUBLE_TOK:
         case TOK_INPUT_TOK: case TOK_INPMID:
+        case TOK_VAL_COUNT:
+        case TOK_RANDOM:
+        case TOK_PAUSE: case TOK_DELAY:
         case TOK_CRSCOL: case TOK_CRSLIN:
         case TOK_CONTRL: case TOK_INTIN: case TOK_INTOUT:
         case TOK_PTSIN: case TOK_PTSOUT:
@@ -2113,32 +3339,32 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_FORM_ALERT: case TOK_MENU_BAR: case TOK_WIND_OPEN:
         case TOK_WIND_CLOSE: case TOK_EVNT_KEYBD:
         case TOK_BGET: case TOK_BPUT:
-        {
-            ast_node *call;
-            gfa_token_type func_tok;
-
-            func_tok = tok;
-            call = ast_create(AST_CALL);
-            call->value.int_val = (long)func_tok;
-            call->has_ident = 0; call->has_str = 0;
-            gfa_lexer_next(parser->lexer);
-
-            /* Arguments optionnels entre parentheses */
-            if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN) {
-                gfa_lexer_next(parser->lexer);
-                while (gfa_lexer_current_token(parser->lexer) != TOK_RPAREN &&
-                       gfa_lexer_current_token(parser->lexer) != TOK_EOF) {
-                    ast_add_arg(call, parse_expression(parser));
-                    if (gfa_lexer_current_token(parser->lexer) == TOK_COMMA) {
-                        gfa_lexer_next(parser->lexer);
-                    }
-                }
-                if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN) {
-                    gfa_lexer_next(parser->lexer);
-                }
-            }
-            return call;
-        }
+        case TOK_UCASE: case TOK_INSERT: case TOK_POS:
+        case TOK_GEMSYS: case TOK_VDISYS:
+        case TOK_SHEL_READ: case TOK_SHEL_WRITE: case TOK_SHEL_GET:
+        case TOK_SHEL_PUT: case TOK_SHEL_FIND: case TOK_SHEL_ENVRN:
+        case TOK_APPL_READ: case TOK_APPL_WRITE:
+        case TOK_APPL_TPLAY: case TOK_APPL_TRECORD:
+        case TOK_FORM_BUTTON: case TOK_FORM_CENTER: case TOK_FORM_DIAL:
+        case TOK_FORM_DO: case TOK_FORM_ERROR: case TOK_FORM_KEYBD:
+        case TOK_FORM_INPUT:
+        case TOK_MENU: case TOK_MENU_KILL: case TOK_MENU_OFF:
+        case TOK_MENU_ICHECK: case TOK_MENU_IENABLE: case TOK_MENU_REGISTER:
+        case TOK_MENU_TEXT: case TOK_MENU_TNORMAL:
+        case TOK_WIND_DELETE: case TOK_WIND_FIND:
+        case TOK_WIND_CREATE: case TOK_WIND_CALC: case TOK_WIND_GET:
+        case TOK_WIND_SET: case TOK_WIND_UPDATE:
+        case TOK_EVNT_MOUSE: case TOK_EVNT_MULTI: case TOK_EVNT_MESAG:
+        case TOK_EVNT_BUTTON: case TOK_EVNT_TIMER: case TOK_EVNT_DCLICK:
+        case TOK_OBJC_ADD: case TOK_OBJC_CHANGE: case TOK_OBJC_DRAW:
+        case TOK_OBJC_DELETE: case TOK_OBJC_ADDMOVE: case TOK_OBJC_MOVE:
+        case TOK_OBJC_FIND: case TOK_OBJC_OFFSET: case TOK_OBJC_PICK:
+        case TOK_OBJC_STATE: case TOK_OBJC_EDIT:
+        case TOK_RSRC_LOAD: case TOK_RSRC_FREE: case TOK_RSRC_GADDR:
+        case TOK_RSRC_SADDR: case TOK_RSRC_OBFIX:
+        case TOK_RCALL: case TOK_RC_COPY: case TOK_RC_INTERSECT:
+        case TOK_GRAF_DRAGBOX:
+            return parse_builtin_call(parser, tok);
 
         default:
             PARSER_ERROR(parser, "Unexpected token in expression");

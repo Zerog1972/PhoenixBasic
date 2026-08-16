@@ -57,6 +57,8 @@ typedef enum {
     AST_ENDFUNC,          /* ENDFUNC                                 */
     AST_LOCAL,            /* LOCAL var1, var2, ...                   */
     AST_DEFFN,            /* DEFFN f(x) = expr                       */
+    AST_DEFFN_RET,        /* RETURN d'un FN multi-lignes : pousse la
+                             valeur de la variable nom puis OP_RET    */
     AST_FN_CALL,          /* FN f(args)                              */
     AST_DEFBIT, AST_DEFBYT, AST_DEFWRD, AST_DEFNUM,
     AST_DEFFLT, AST_DEFSTR, AST_DEFDBL,
@@ -136,6 +138,17 @@ typedef enum {
 
     /* Definitions graphiques */
     AST_DEFFILL, AST_DEFLINE, AST_DEFTEXT, AST_DEFMOUSE, AST_DEFMARK,
+
+    /* Nouvelles instructions (2026-08) */
+    AST_MAT,            /* MAT … : value.int_val = sous-op,
+                           left = cible, body = src1, cond = src2,
+                           step = valeur scalaire */
+    AST_QSORT_STMT,     /* QSORT arr(), lo, hi                    */
+    AST_INSERT_ELEM,    /* INSERT x(i), val                       */
+    AST_DELETE_ELEM,    /* DELETE x(i)                            */
+    AST_DRAW,           /* DRAW "prog" (turtle) ou DRAW(n)        */
+    AST_WINDOW,         /* CLEARW/TITLEW/INFOW/TOPW/GETSIZE/MWOUT */
+    AST_GFX_STMT,       /* HLINE/PELLIPSE/POLYLINE/ATEXT/…        */
 
     /* Noeud sentinelle pour les listes */
     AST_STATEMENT_LIST,

@@ -10,6 +10,7 @@
 #include "codegen.h"
 #include "token.h"
 #include "files.h"
+#include "matrix.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -35,6 +36,14 @@ typedef struct {
     int error;
     int patch_stack[MAX_PATCHES];
     int patch_depth;
+    int option_base;               /* OPTION BASE n                    */
+    int exit_stack[MAX_PATCHES];   /* marqueurs de boucles imbriquees  */
+    int exit_patch_base[MAX_PATCHES];
+    int exit_patches[MAX_PATCHES]; /* sauts a patcher a la sortie      */
+    int exit_patch_count;
+    int exit_depth;
+    gfa_label_info *labels;      /* labels connus (FN/PROC/GOTO)       */
+    int label_count;
 } codegen_ctx;
 
 /* Forward declarations */
@@ -46,9 +55,14 @@ static void cg_if(codegen_ctx *ctx, ast_node *node);
 static void cg_for(codegen_ctx *ctx, ast_node *node);
 static void cg_while(codegen_ctx *ctx, ast_node *node);
 static void cg_repeat(codegen_ctx *ctx, ast_node *node);
+static void cg_do_loop(codegen_ctx *ctx, ast_node *node);
+static void cg_exit_if(codegen_ctx *ctx, ast_node *node);
+static void cg_loop_enter(codegen_ctx *ctx);
+static void cg_loop_leave(codegen_ctx *ctx);
 static void cg_select(codegen_ctx *ctx, ast_node *node);
 static void cg_print(codegen_ctx *ctx, ast_node *node);
 static void cg_call(codegen_ctx *ctx, ast_node *node);
+static int cg_name_is_label(codegen_ctx *ctx, const char *name);
 static void cg_collect_data(ast_node *node, double **data_out, int *count_out);
 
 /* Helpers */
@@ -158,6 +172,11 @@ int gfa_codegen_compile(gfa_symbol_table *symbol_table,
     ctx.sym   = symbol_table;
     ctx.error = 0;
     ctx.patch_depth = 0;
+    ctx.option_base = 0;
+    ctx.exit_depth = 0;
+    ctx.exit_patch_count = 0;
+    ctx.labels = labels;
+    ctx.label_count = label_count;
     if (ctx.bc == NULL) return -1;
 
     /* Collect DATA values */
@@ -383,6 +402,9 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
             arg = node->left;
             while (arg) { cg_expression(ctx, arg); arg = arg->right; }
             cg_emit(ctx, op);
+            /* Forme instruction : le runtime pousse le nombre d'octets,
+               depiler pour garder la pile propre. */
+            cg_emit(ctx, OP_POP);
         }
         break;
 
@@ -472,13 +494,27 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
               }
           }
           if (node->body) cg_statement(ctx, node->body);
-          /* FUNCTION_DEF always emits OP_RET at end (fallback) */
-          if (node->type == AST_FUNCTION_DEF)
+          /* FUNCTION_DEF toujours OP_RET en fin (fallback) : pousse la
+             valeur de la variable nom (resultat implicite) */
+          if (node->type == AST_FUNCTION_DEF) {
+              if (node->has_ident && node->value.ident) {
+                  gfa_variable *rv = cg_resolve_var(ctx, node->value.ident);
+                  if (rv) cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)rv);
+              }
               cg_emit(ctx, OP_RET);
+          }
           cg_patch(ctx, jmp_skip, (os_int32)cg_current(ctx)); }
         break;
 
     case AST_ENDFUNC:  /* Fallback si pas deja fait par RETURN */
+        cg_emit(ctx, OP_RET);
+        break;
+
+    case AST_DEFFN_RET:  /* RETURN d'un FN multi-lignes */
+        if (node->has_ident && node->value.ident) {
+            gfa_variable *rv2 = cg_resolve_var(ctx, node->value.ident);
+            if (rv2) cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)rv2);
+        }
         cg_emit(ctx, OP_RET);
         break;
 
@@ -532,8 +568,15 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
                   }
               }
           }
-          /* Body = single expression, then return */
-          if (node->body) {
+          /* Body = single expression, then return ; ou corps
+             multi-lignes (line=1) : resultat = variable nom */
+          if (node->line == 1 && node->body) {
+              cg_statement(ctx, node->body);
+              if (node->has_ident && node->value.ident) {
+                  gfa_variable *rv = cg_resolve_var(ctx, node->value.ident);
+                  if (rv) cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)rv);
+              }
+          } else if (node->body) {
               cg_expression(ctx, node->body);
           }
           cg_emit(ctx, OP_RET);
@@ -569,7 +612,13 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
     case AST_LINE_INPUT:
         if (node->left && node->left->has_ident && node->left->value.ident) {
             gfa_variable *var = cg_resolve_var(ctx, node->left->value.ident);
-            cg_emit_ptr(ctx, OP_LINE_INPUT, (void *)var);
+            if (node->cond != NULL) {
+                /* LINE INPUT #n, var$ : canal sur la pile */
+                cg_expression(ctx, node->cond);
+                cg_emit_ptr(ctx, OP_LINE_INPUT_FILE, (void *)var);
+            } else {
+                cg_emit_ptr(ctx, OP_LINE_INPUT, (void *)var);
+            }
         }
         break;
 
@@ -599,9 +648,24 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
                   dims[ndim++] = (os_int32)dim_node->value.float_val;
                   dim_node = dim_node->right;
               }
-              if (ndim > 0)
+              if (ndim > 0) {
+                  int i;
                   gfa_var_array_create(ctx->sym, name_node->value.ident,
-                                       GFA_VAR_FLOAT, ndim, dims);
+                                       GFA_VAR_FLOAT, ndim, dims,
+                                       (os_int32)ctx->option_base);
+                  /* OP_DIM runtime : recree le tableau apres ERASE */
+                  for (i = 0; i < ndim; i++)
+                      cg_emit_float_const(ctx, OP_PUSH_CONST,
+                                          (double)dims[i]);
+                  {
+                      int idx = cg_emit_str(ctx, OP_DIM,
+                                            name_node->value.ident);
+                      if (idx >= 0) {
+                          ctx->bc->code[idx].has_operand2 = 1;
+                          ctx->bc->code[idx].operand2.index2 = ndim;
+                      }
+                  }
+              }
           } }
         break;
 
@@ -708,12 +772,339 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
         break;
 
     /* --- Not yet implemented / no bytecode needed --- */
+    /* ------------------------------------------------------------ */
+    /* Nouvelles instructions (2026-08)                              */
+    /* ------------------------------------------------------------ */
+    case AST_ERASE:
+        {
+            ast_node *ch;
+            for (ch = node->left; ch != NULL; ch = ch->right) {
+                if (ch->has_ident && ch->value.ident) {
+                    gfa_variable *v = cg_resolve_var(ctx,
+                        ch->value.ident);
+                    if (v != NULL)
+                        cg_emit_ptr(ctx, OP_ERASE_VAR, (void *)v);
+                }
+            }
+        }
+        break;
+    case AST_CLEAR:
+        cg_emit(ctx, OP_CLEAR_ALL);
+        break;
+    case AST_QUIT:
+        if (node->left != NULL)
+            cg_expression(ctx, node->left);  /* code de sortie */
+        cg_emit(ctx, OP_QUIT);
+        break;
+    case AST_QSORT_STMT:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL) {
+                if (node->body) cg_expression(ctx, node->body);   /* lo */
+                if (node->cond) cg_expression(ctx, node->cond);   /* hi */
+                cg_emit_ptr(ctx,
+                    (node->value.int_val != 0) ? OP_SSORT : OP_QSORT,
+                    (void *)v);
+            }
+        }
+        break;
+    case AST_INSERT_ELEM:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL) {
+                if (node->body) cg_expression(ctx, node->body);   /* idx */
+                if (node->cond) cg_expression(ctx, node->cond);   /* val */
+                cg_emit_ptr(ctx, OP_INSERT_ELEM, (void *)v);
+            }
+        }
+        break;
+    case AST_DELETE_ELEM:
+        {
+            gfa_variable *v = NULL;
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                v = cg_resolve_var(ctx, node->left->value.ident);
+            if (v != NULL) {
+                if (node->body) cg_expression(ctx, node->body);   /* idx */
+                cg_emit_ptr(ctx, OP_DELETE_ELEM, (void *)v);
+            }
+        }
+        break;
+    case AST_DRAW:
+        if (node->value.int_val != 0) {
+            /* DRAW(n) : interrogation */
+            if (node->body) cg_expression(ctx, node->body);
+            cg_emit(ctx, OP_DRAW_QUERY);
+            cg_emit(ctx, OP_POP);  /* statement : resultat jete */
+        } else {
+            /* DRAW "prog" : turtle */
+            if (node->body) cg_expression(ctx, node->body);
+            cg_emit(ctx, OP_DRAW_TURTLE);
+        }
+        break;
+    case AST_WINDOW:
+        {
+            int sub = (int)node->value.int_val;
+            int i;
+            if (sub == 5) {
+                /* GETSIZE n,x,y,w,h : les args sont des identifiants */
+                ast_node *idn = NULL, *idy = NULL, *idw = NULL,
+                         *idh = NULL;
+                if (node->args && node->arg_count >= 5) {
+                    idn = node->args[0]; idy = node->args[1];
+                    idw = node->args[2]; idh = node->args[3];
+                }
+                if (idn != NULL)
+                    cg_expression(ctx, idn);  /* n */
+                cg_emit_int(ctx, OP_WINDOW_STMT, (os_int32)sub);
+                /* Pile : [w][h][y][x] (x au sommet) */
+                if (idh && idh->has_ident && idh->value.ident) {
+                    gfa_variable *vh = cg_resolve_var(ctx,
+                        idh->value.ident);
+                    cg_emit_ptr(ctx, OP_POP_STORE, (void *)vh);
+                } else cg_emit(ctx, OP_POP);
+                if (idw && idw->has_ident && idw->value.ident) {
+                    gfa_variable *vw = cg_resolve_var(ctx,
+                        idw->value.ident);
+                    cg_emit_ptr(ctx, OP_POP_STORE, (void *)vw);
+                } else cg_emit(ctx, OP_POP);
+                if (idy && idy->has_ident && idy->value.ident) {
+                    gfa_variable *vy = cg_resolve_var(ctx,
+                        idy->value.ident);
+                    cg_emit_ptr(ctx, OP_POP_STORE, (void *)vy);
+                } else cg_emit(ctx, OP_POP);
+                (void)idn;
+            } else {
+                for (i = 0; i < node->arg_count; i++)
+                    cg_expression(ctx, node->args[i]);
+                cg_emit_int(ctx, OP_WINDOW_STMT, (os_int32)sub);
+            }
+        }
+        break;
+    case AST_GFX_STMT:
+        {
+            int mode = (int)node->value.int_val;
+            ast_node *a0 = NULL, *a1 = NULL, *a2 = NULL, *a3 = NULL,
+                     *a4 = NULL;
+            int idx;
+            if (node->args) {
+                if (node->arg_count > 0) a0 = node->args[0];
+                if (node->arg_count > 1) a1 = node->args[1];
+                if (node->arg_count > 2) a2 = node->args[2];
+                if (node->arg_count > 3) a3 = node->args[3];
+                if (node->arg_count > 4) a4 = node->args[4];
+            }
+            switch (mode) {
+                case 10:  /* ALINE x1,y1,x2,y2 */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a3);
+                    cg_expression(ctx, a2);
+                    cg_emit(ctx, OP_LINE_GFX);
+                    break;
+                case 11:  /* HLINE y,x1,x2 : polyligne (x1,y)-(x2,y) */
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a2);
+                    cg_expression(ctx, a0);
+                    cg_emit_float_const(ctx, OP_PUSH_CONST, (double)2);
+                    idx = cg_emit(ctx, OP_POLY_GFX);
+                    if (idx >= 0) ctx->bc->code[idx].operand.int_val = 0;
+                    break;
+                case 12:  /* RBOX x1,y1,dx,dy : rectangle relatif */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a2);
+                    cg_emit(ctx, OP_ADD);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a3);
+                    cg_emit(ctx, OP_ADD);
+                    cg_emit(ctx, OP_BOX_GFX);
+                    break;
+                case 13:  /* PELLIPSE x,y,rx,ry */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a2);
+                    cg_expression(ctx, a3);
+                    cg_emit_float_const(ctx, OP_PUSH_CONST, (double)1);
+                    cg_emit(ctx, OP_ELLIPSE_GFX);
+                    break;
+                case 14:  /* PLOT x,y */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_emit(ctx, OP_PLOT_GFX);
+                    break;
+                case 15:  /* FILL x,y[,lim] */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    if (a2 != NULL)
+                        cg_expression(ctx, a2);
+                    else
+                        cg_emit_float_const(ctx, OP_PUSH_CONST, (double)-1);
+                    cg_emit(ctx, OP_FILL_GFX);
+                    break;
+                case 16:  /* ATEXT/TEXT x,y,"texte" */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a2);
+                    cg_emit(ctx, OP_TEXT_GFX);
+                    break;
+                case 17:  /* ACHAR x,y,code */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a2);
+                    cg_emit(ctx, OP_ACHAR_GFX);
+                    break;
+                case 18:  /* SETCOLOR n,val */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_emit(ctx, OP_SETCOLOR);
+                    break;
+                case 19:  /* MODE n */
+                    cg_expression(ctx, a0);
+                    cg_emit(ctx, OP_MODE_GFX);
+                    break;
+                case 20: case 21: case 22: case 23:
+                    /* POLYLINE/POLYFILL/CURVE/POLYMARK n, pts&() */
+                    cg_expression(ctx, a0);  /* n */
+                    if (a1 != NULL && a1->has_ident && a1->value.ident) {
+                        gfa_variable *av = cg_resolve_var(ctx,
+                            a1->value.ident);
+                        idx = cg_emit_ptr(ctx, OP_POLY_GFX,
+                            (void *)av);
+                        if (idx >= 0)
+                            ctx->bc->code[idx].operand.int_val =
+                                (os_int32)(mode - 20);
+                    } else {
+                        idx = cg_emit(ctx, OP_POLY_GFX);
+                        if (idx >= 0)
+                            ctx->bc->code[idx].operand.int_val =
+                                (os_int32)(mode - 20);
+                    }
+                    break;
+                case 24:  /* CLIP/ACLIP x1,y1,x2,y2 */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a2);
+                    cg_expression(ctx, a3);
+                    cg_emit(ctx, OP_CLIP_GFX);
+                    break;
+                case 25:  /* GET x1,y1,x2,y2,var$ */
+                    if (a4 != NULL && a4->has_ident && a4->value.ident)
+                        cg_emit_str(ctx, OP_PUSH_STRING,
+                                    a4->value.ident);
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a3);
+                    cg_expression(ctx, a2);
+                    cg_emit(ctx, OP_GETBIT_GFX);
+                    break;
+                case 26:  /* PUT x,y,var$[,mode] */
+                    if (a2 != NULL && a2->has_ident && a2->value.ident)
+                        cg_emit_str(ctx, OP_PUSH_STRING,
+                                    a2->value.ident);
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_emit(ctx, OP_PUTBIT_GFX);
+                    break;
+                case 27:  /* WINDOW (x0,y0),(x1,y1) */
+                    cg_expression(ctx, a0);
+                    cg_expression(ctx, a1);
+                    cg_expression(ctx, a2);
+                    cg_expression(ctx, a3);
+                    cg_emit(ctx, OP_WINDOW_GFX);
+                    break;
+                default:
+                    break;
+            }
+        }
+        break;
+    case AST_MAT:
+        {
+            long sub = node->value.int_val;
+            const char *target = NULL;
+            const char *src1 = NULL;
+            const char *src2 = NULL;
+            int ti = -1, si = -1;
+            int instr_idx;
+            gfa_opcode mop;
+
+            if (node->left && node->left->has_ident &&
+                node->left->value.ident)
+                target = node->left->value.ident;
+            if (node->body && node->body->has_ident &&
+                node->body->value.ident)
+                src1 = node->body->value.ident;
+            if (node->cond && node->cond->has_ident &&
+                node->cond->value.ident)
+                src2 = node->cond->value.ident;
+            if (target != NULL)
+                ti = gfa_bytecode_add_string(ctx->bc, target);
+            if (src1 != NULL)
+                si = gfa_bytecode_add_string(ctx->bc, src1);
+            /* Arguments de pile */
+            if (sub == MAT_OP_SET && node->step != NULL)
+                cg_expression(ctx, node->step);
+            if (src2 != NULL)
+                cg_emit_str(ctx, OP_PUSH_STRING, src2);
+            /* Opcode selon la sous-operation */
+            if (sub == MAT_OP_READ)      mop = OP_MAT_READ;
+            else if (sub == MAT_OP_PRINT) mop = OP_MAT_PRINT;
+            else if (sub == MAT_OP_CLR)   mop = OP_MAT_CLR;
+            else if (sub == MAT_OP_ONE)   mop = OP_MAT_ONE;
+            else if (sub == MAT_OP_CPY)   mop = OP_MAT_CPY;
+            else if (sub == MAT_OP_ADD)   mop = OP_MAT_ADD;
+            else if (sub == MAT_OP_SUB)   mop = OP_MAT_SUB;
+            else if (sub == MAT_OP_MUL)   mop = OP_MAT_MUL;
+            else if (sub == MAT_OP_TRANS) mop = OP_MAT_TRANS;
+            else if (sub == MAT_OP_INV)   mop = OP_MAT_INV;
+            else if (sub == MAT_OP_DET)   mop = OP_MAT_DET;
+            else if (sub == MAT_OP_RANG)  mop = OP_MAT_RANG;
+            else if (sub == MAT_OP_NORM)  mop = OP_MAT_NORM;
+            else if (sub == MAT_OP_SET)   mop = OP_MAT_SET;
+            else                          mop = OP_MAT_CLR;
+            /* MAT INPUT : comme READ mais depuis la console */
+            if (sub == MAT_OP_INPUT) mop = OP_MAT_INPUT;
+            instr_idx = cg_emit(ctx, mop);
+            if (instr_idx >= 0) {
+                ctx->bc->code[instr_idx].operand.str_index = ti;
+                ctx->bc->code[instr_idx].has_operand2 = 1;
+                ctx->bc->code[instr_idx].operand2.index2 = si;
+            }
+        }
+        break;
+
     case AST_VOID: case AST_TILDE: case AST_LET:
-    case AST_CALL:         cg_call(ctx, node); break;
+    case AST_CALL:
+        cg_call(ctx, node);
+        /* Builtin en position statement : depiler le resultat pour
+           garder la pile propre (residus = faux nb d'args ensuite). */
+        if (!(node->has_ident && node->value.ident)) {
+            cg_emit(ctx, OP_POP);
+        }
+        break;
     case AST_FN_CALL:      cg_call(ctx, node); break;
-    case AST_REM: case AST_LINE_NUMBER: case AST_ERASE:
-    case AST_CLEAR: case AST_OPTION_BASE: case AST_QUIT:
-    case AST_DO_LOOP: case AST_EXIT_IF:
+    case AST_DO_LOOP:   cg_do_loop(ctx, node); break;
+    case AST_EXIT_IF:   cg_exit_if(ctx, node); break;
+    case AST_OPTION_BASE:
+        /* OPTION BASE n : base des tableaux DIM subsequent (constant) */
+        {
+            ast_node *e;
+            ctx->option_base = 0;
+            e = node->left;
+            if (e && e->type == AST_ASSIGN &&
+                !e->has_ident && !e->has_str)
+                ctx->option_base = (int)e->value.float_val;
+        }
+        break;
+    case AST_REM: case AST_LINE_NUMBER:
     case AST_ON_BREAK:
     case AST_DEFBIT: case AST_DEFBYT: case AST_DEFWRD:
     case AST_DEFNUM: case AST_DEFFLT: case AST_DEFSTR: case AST_DEFDBL:
@@ -767,7 +1158,7 @@ static void cg_expression(codegen_ctx *ctx, ast_node *node)
             long op = node->value.int_val;
             cg_expression(ctx, node->left);
             if (op == (long)TOK_MINUS) cg_emit(ctx, OP_NEG);
-            else if (op == (long)TOK_NOT_OP) cg_emit(ctx, OP_NOT);
+            else if (op == (long)TOK_NOT_OP || op == (long)TOK_TILDE) cg_emit(ctx, OP_NOT);
         } else {
             /* Leaf */
             if (node->has_str && node->value.str_val)
@@ -807,12 +1198,21 @@ static void cg_assign(codegen_ctx *ctx, ast_node *node)
     /* Array assignment: a(indices) = expr */
     if (target->type == AST_CALL && target->has_ident && target->value.ident) {
         gfa_variable *var = cg_resolve_var(ctx, target->value.ident);
-        if (var && var->type == GFA_VAR_ARRAY) {
+        int idx;
+        /* Tableau connu OU nom inconnu (cree a l'execution par MAT) :
+           le runtime depile proprement et neecrit que si la variable
+           est bien un tableau au moment de l'execution. */
+        if ((var != NULL && var->type == GFA_VAR_ARRAY) ||
+            !cg_name_is_label(ctx, target->value.ident)) {
             int i;
             for (i = 0; i < target->arg_count; i++)
                 cg_expression(ctx, target->args[i]);
             cg_expression(ctx, value);
-            cg_emit_ptr(ctx, OP_ARRAY_STORE, (void *)var);
+            idx = cg_emit_ptr(ctx, OP_ARRAY_STORE, (void *)var);
+            if (idx >= 0) {
+                ctx->bc->code[idx].has_operand2 = 1;
+                ctx->bc->code[idx].operand2.index2 = target->arg_count;
+            }
             return;
         }
     }
@@ -848,6 +1248,7 @@ static void cg_for(codegen_ctx *ctx, ast_node *node)
     en = sn ? sn->right : NULL;
     if (!vn || !sn || !en) return;
 
+    cg_loop_enter(ctx);
     cg_expression(ctx, sn);
     if (vn->has_ident && vn->value.ident) {
         gfa_variable *v = cg_resolve_var(ctx, vn->value.ident);
@@ -859,7 +1260,7 @@ static void cg_for(codegen_ctx *ctx, ast_node *node)
         cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)v);
     }
     cg_expression(ctx, en);
-    cg_emit(ctx, OP_GT);
+    cg_emit(ctx, (node->value.int_val != 0) ? OP_LT : OP_GT);
     jmp_end = cg_emit_int(ctx, OP_JMP_IF_TRUE, 0);
     cg_push_patch(ctx, jmp_end);
     cg_statement(ctx, node->body);
@@ -867,34 +1268,103 @@ static void cg_for(codegen_ctx *ctx, ast_node *node)
         gfa_variable *v = cg_resolve_var(ctx, vn->value.ident);
         cg_emit_ptr(ctx, OP_PUSH_VAR, (void *)v);
         if (node->step) cg_expression(ctx, node->step);
-        else cg_emit_float_const(ctx, OP_PUSH_CONST, (double)1);
+        else cg_emit_float_const(ctx, OP_PUSH_CONST,
+             (node->value.int_val != 0) ? (double)-1 : (double)1);
         cg_emit(ctx, OP_ADD);
         cg_emit_ptr(ctx, OP_POP_STORE, (void *)v);
     }
     cg_emit_int(ctx, OP_JMP, (os_int32)loop_start);
     cg_pop_patch(ctx);
+    cg_loop_leave(ctx);
 }
 
 static void cg_while(codegen_ctx *ctx, ast_node *node)
 {
     int loop_start, jmp_end;
     if (!node) return;
+    cg_loop_enter(ctx);
     loop_start = cg_current(ctx);
     cg_expression(ctx, node->cond);
     jmp_end = cg_emit_int(ctx, OP_JMP_IF_FALSE, 0);
     cg_statement(ctx, node->body);
     cg_emit_int(ctx, OP_JMP, (os_int32)loop_start);
     cg_patch(ctx, jmp_end, (os_int32)cg_current(ctx));
+    cg_loop_leave(ctx);
 }
 
 static void cg_repeat(codegen_ctx *ctx, ast_node *node)
 {
     int loop_start;
     if (!node) return;
+    cg_loop_enter(ctx);
     loop_start = cg_current(ctx);
     cg_statement(ctx, node->body);
     cg_expression(ctx, node->cond);
     cg_emit_int(ctx, OP_JMP_IF_FALSE, (os_int32)loop_start);
+    cg_loop_leave(ctx);
+}
+
+/* ------------------------------------------------------------------ */
+/* EXIT IF / DO...LOOP : points de sortie des boucles imbriquees      */
+/* ------------------------------------------------------------------ */
+
+static void cg_loop_enter(codegen_ctx *ctx)
+{
+    if (ctx->exit_depth < MAX_PATCHES) {
+        ctx->exit_stack[ctx->exit_depth] = 0; /* marqueur (valeur non usee) */
+        ctx->exit_patch_base[ctx->exit_depth] = ctx->exit_patch_count;
+        ctx->exit_depth++;
+    }
+}
+
+static void cg_loop_leave(codegen_ctx *ctx)
+{
+    int i;
+    int pos;
+    int base_patches;
+    if (ctx->exit_depth == 0) return;
+    ctx->exit_depth--;
+    base_patches = ctx->exit_patch_base[ctx->exit_depth];
+    pos = cg_current(ctx);
+    for (i = base_patches; i < ctx->exit_patch_count; i++)
+        cg_patch(ctx, ctx->exit_patches[i], (os_int32)pos);
+    ctx->exit_patch_count = base_patches;
+}
+
+static void cg_exit_if(codegen_ctx *ctx, ast_node *node)
+{
+    int idx;
+    if (ctx->exit_depth == 0) return;  /* hors boucle : ignore */
+    if (node && node->cond)
+        cg_expression(ctx, node->cond);
+    idx = cg_emit_int(ctx,
+        (node && node->cond) ? OP_JMP_IF_TRUE : OP_JMP, 0);
+    if (idx >= 0 && ctx->exit_patch_count < MAX_PATCHES)
+        ctx->exit_patches[ctx->exit_patch_count++] = idx;
+}
+
+static void cg_do_loop(codegen_ctx *ctx, ast_node *node)
+{
+    int loop_start;
+    int cond_idx;
+    int is_until;
+    if (!node) return;
+    /* node->value.int_val : 0 = LOOP WHILE, 1 = LOOP UNTIL */
+    is_until = (node->value.int_val != 0) ? 1 : 0;
+    cg_loop_enter(ctx);
+    loop_start = cg_current(ctx);
+    cg_statement(ctx, node->body);
+    if (node->cond) {
+        /* LOOP WHILE c : continuer si c vrai  (sortie si c faux)
+           LOOP UNTIL c : continuer si c faux (sortie si c vrai) */
+        cg_expression(ctx, node->cond);
+        cond_idx = cg_emit_int(ctx,
+            is_until ? OP_JMP_IF_TRUE : OP_JMP_IF_FALSE, 0);
+        if (cond_idx >= 0 && ctx->exit_patch_count < MAX_PATCHES)
+            ctx->exit_patches[ctx->exit_patch_count++] = cond_idx;
+    }
+    cg_emit_int(ctx, OP_JMP, (os_int32)loop_start);
+    cg_loop_leave(ctx);
 }
 
 static void cg_select(codegen_ctx *ctx, ast_node *node)
@@ -974,6 +1444,18 @@ static void cg_print(codegen_ctx *ctx, ast_node *node)
     }
 }
 
+static int cg_name_is_label(codegen_ctx *ctx, const char *name)
+{
+    int i;
+    if (ctx->labels == NULL || name == NULL) return 0;
+    for (i = 0; i < ctx->label_count; i++) {
+        if (ctx->labels[i].name != NULL &&
+            strieq(ctx->labels[i].name, name))
+            return 1;
+    }
+    return 0;
+}
+
 static void cg_call(codegen_ctx *ctx, ast_node *node)
 {
     int i;
@@ -983,18 +1465,53 @@ static void cg_call(codegen_ctx *ctx, ast_node *node)
             cg_expression(ctx, node->args[i]);
     }
     if (node->has_ident && node->value.ident) {
-        /* User-defined function OR array access */
+        /* Fonction utilisateur (DEF FN / PROCEDURE) ou acces tableau */
         gfa_variable *var = cg_resolve_var(ctx, node->value.ident);
-        if (var && var->type == GFA_VAR_ARRAY) {
-            cg_emit_ptr(ctx, OP_ARRAY_LOAD, (void *)var);
-        } else {
+        int idx;
+        if (var != NULL && var->type == GFA_VAR_ARRAY) {
+            idx = cg_emit_ptr(ctx, OP_ARRAY_LOAD, (void *)var);
+            if (idx >= 0) {
+                ctx->bc->code[idx].has_operand2 = 1;
+                ctx->bc->code[idx].operand2.index2 = node->arg_count;
+            }
+        } else if (cg_name_is_label(ctx, node->value.ident)) {
+            /* Fonction utilisateur (DEF FN / PROCEDURE) */
             int str_idx = gfa_bytecode_add_string(ctx->bc, node->value.ident);
-            int instr_idx = cg_emit_int(ctx, OP_CALL, -1);
-            ctx->bc->code[instr_idx].has_operand2 = 1;
-            ctx->bc->code[instr_idx].operand2.int_val2 = str_idx;
+            idx = cg_emit_int(ctx, OP_CALL, -1);
+            if (idx >= 0) {
+                ctx->bc->code[idx].has_operand2 = 1;
+                ctx->bc->code[idx].operand2.int_val2 = str_idx;
+            }
+        } else {
+            /* Nom inconnu : tableau cree a l'execution (ex : MAT b = a
+               avant DIM b). Le pointeur est stable (le runtime convertit
+               la variable sur place) ; si ce n'est pas un tableau,
+               OP_ARRAY_LOAD retourne 0. */
+            idx = cg_emit_ptr(ctx, OP_ARRAY_LOAD, (void *)var);
+            if (idx >= 0) {
+                ctx->bc->code[idx].has_operand2 = 1;
+                ctx->bc->code[idx].operand2.index2 = node->arg_count;
+            }
         }
     } else {
         /* Built-in function */
-        cg_emit_int(ctx, OP_CALL_BUILTIN, (os_int32)node->value.int_val);
+        int tok;
+        int op;
+        int instr_idx;
+        tok = (int)node->value.int_val;
+        /* GEMDOS()/BIOS()/XBIOS() ont des opcodes dedies : le runtime
+           attend [fn] [arg1] [arg2] sur la pile. */
+        if (tok == TOK_GEMDOS)      op = OP_GEMDOS;
+        else if (tok == TOK_BIOS)   op = OP_BIOS;
+        else if (tok == TOK_XBIOS)  op = OP_XBIOS;
+        else                        op = OP_CALL_BUILTIN;
+        instr_idx = cg_emit_int(ctx, op, (os_int32)tok);
+        if (op == OP_CALL_BUILTIN && instr_idx >= 0) {
+            /* operand2 = nombre d'arguments (le runtime consomme
+               exactement ces arguments et garantit un resultat unique
+               sur la pile). */
+            ctx->bc->code[instr_idx].has_operand2 = 1;
+            ctx->bc->code[instr_idx].operand2.int_val2 = node->arg_count;
+        }
     }
 }
