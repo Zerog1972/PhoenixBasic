@@ -1,6 +1,6 @@
 # Plan de Développement — PhoenixBasic
 
-> **Dernière mise à jour : 2026-07-03**
+> **Dernière mise à jour : 2026-08-15**
 >
 > Analyse complète des fonctionnalités GFA Basic 3.5 implémentées vs manquantes,
 > avec plan de travail priorisé.
@@ -17,19 +17,21 @@ PhoenixBasic est un interpréteur **GFA Basic 3.5** (langage BASIC historique de
 
 | Priorité | Nb items | Effort estimé | Description |
 |----------|----------|---------------|-------------|
-| **✅ Déjà implémenté** | ~130 | — | Flux, procédures, maths, chaînes, bits, fichiers, graphismes SDL2, TOS partiel |
-| **🔴 Priorité A** | 22 | ~2-3 jours | Runtime `case` uniquement : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, `==` (bug fix)… |
-| **🟠 Priorité B** | 40 | ~5-7 jours | Parser + codegen + runtime : SPOKE, graphismes avancés (PLOT, DRAW, TEXT, POLYLINE, FILL, BITBLT…), SETTIME, SWAP, QSORT |
+| **✅ Déjà implémenté** | ~150 | — | Flux, procédures, maths, chaînes, bits, fichiers, graphismes, TOS partiel, vmem (PEEK/POKE réels) |
+| **✅ Priorité A** | 22/22 ✅ | fait | Runtime `case` : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, `==`, RAND(n), PEEK/POKE via vmem… |
+| **🟠 Priorité B** | 35 | ~5-7 jours | Parser + codegen + runtime : graphismes avancés (PLOT, DRAW, TEXT, POLYLINE, FILL, BITBLT…), SETTIME, QSORT, INSERT/DELETE |
 | **🟢 Priorité C** | 10 | ~4-8 semaines | Nouveaux sous-systèmes : GEM AES, VDI, MAT, FIELD, SHEL, CHAIN |
 
-**Total restant : 72 items**
+**Total restant : 45 items** (Priorité A terminée le 2026-08-15)
 
 ---
 
 ## ✅ Déjà implémenté
 
 ### Contrôle de flux
-IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP/DOWNTO, WHILE/WEND, REPEAT/UNTIL, DO/LOOP, EXIT IF, SELECT/CASE/ENDSELECT, GOTO, GOSUB/RETURN, ON GOTO/GOSUB, STOP, END, QUIT
+IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, WHILE/WEND, REPEAT/UNTIL, DO/LOOP [WHILE|UNTIL], EXIT IF, SELECT/CASE/ENDSELECT, GOTO, GOSUB/RETURN, ON GOTO/GOSUB, STOP, END, QUIT
+
+> `FOR … DOWNTO` : non implémentée (erreur de parse). QUIT sans arg : parsé, sans effet.
 
 ### Procédures/fonctions
 PROCEDURE/FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`)
@@ -38,7 +40,9 @@ PROCEDURE/FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récurs
 +, -, *, /, ^, =, <>, <, >, <=, >=, AND, OR, XOR, NOT, EQV, IMP, MOD, DIV, & (concaténation)
 
 ### PRINT/INPUT
-PRINT, PRINT # (fichier), PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, LINE INPUT, INKEY$, CLS, LOCATE, HTAB, VTAB
+PRINT, PRINT # (fichier), PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, INKEY$, CLS, LOCATE
+
+> `LINE INPUT`, `HTAB`, `VTAB` : non implémentés (erreur de parse).
 
 ### Fonctions mathématiques (35)
 SIN, COS, TAN, ATN, ASIN, ACOS, SINQ, COSQ, SINH, COSH, TANH, EXP, LOG, LOG10, SQR, ABS, SGN, INT, FRAC, FIX, ROUND, CEIL, TRUNC, MIN, MAX, EVEN, ODD, PRED, SUCC, FACT, COMBIN, VARIAT, RND, DEG, RAD, CFLOAT, CINT
@@ -50,10 +54,14 @@ LEN, ASC, CHR$, VAL, VAL?, LEFT$, RIGHT$, MID$, INSTR, RINSTR, UPPER$, LCASE$, L
 BTST, BSET, BCLR, BCHG, SHL, SHR, ROL, ROR
 
 ### Tableaux 1D
-DIM, ERASE, ARRAYFILL, DIM?, OPTION BASE
+DIM, OPTION BASE 0/1 (base des indices des tableaux DIM ultérieurs)
+
+> `ERASE`, `ARRAYFILL`, `DIM?` : non implémentés (no-op ou erreur de parse).
 
 ### Mémoire
-PEEK, POKE, DPEEK, DPOKE, LPEEK, LPOKE, MALLOC, MFREE, DATA, READ, RESTORE
+PEEK, POKE, DPEEK, DPOKE, LPEEK, LPOKE (via vmem), MALLOC (partiel), DATA, READ, RESTORE
+
+> `MFREE`, `BLOAD`, `BGET`, `BPUT` : non implémentés (erreur de parse). `BSAVE` : stub.
 
 ### Fichiers
 OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#, INPUT#, BLOAD (stub), BSAVE (stub), BGET (stub), BPUT (stub)
@@ -62,13 +70,20 @@ OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#, INPUT#, BLOAD (stub), BSAVE (stub)
 COLOR (palette 16 couleurs), LINE, BOX, PBOX, CIRCLE, PCIRCLE
 
 ### Événements
-EVERY, AFTER, ON ERROR, ON BREAK, ERROR, ERR
+EVERY, AFTER, ON ERROR, ERROR, ERR
+
+> `ON BREAK` : parsé, sans effet (no-op au codegen).
 
 ### Son
 BEEP, SOUND ch, freq, dur, vol, env
 
 ### TOS partiel
 GEMDOS (~15 fonctions : Fopen, Fclose, Fread, Fwrite, Fdelete, Fseek, Malloc, Mfree, Cconin, Cconout, Cconws, Cnecin, Dgetdrv, Dsetdrv, Super, Fversion, Pterm), BIOS (Bconin, Bconout), XBIOS (Getrez, Physbase, Random, Gettime, etc.)
+
+> **Fonctions BASIC `GEMDOS()`, `BIOS()`, `XBIOS()`** : câblées depuis le 2026-08-15
+> (opcodes `OP_GEMDOS/BIOS/XBIOS` émis par le codegen ; avant, elles chutaient dans le
+> default du `OP_CALL_BUILTIN`). La couche C `gfa_gemdos/gfa_bios/gfa_xbios` est testée
+> dans `tests/test_gfx.c`.
 
 ### Définitions (no-op)
 DEFFILL, DEFLINE, DEFTEXT, DEFMOUSE, DEFMARK
@@ -81,46 +96,83 @@ LIST (avec indentation), EDIT (curseur ← → Home End Bksp Del), DELETE, INSER
 
 ---
 
-## 🔴 Priorité A — Quick Wins (22 items, ~2-3 jours)
+## ✅ Priorité A — Quick Wins (22 items) — TERMINÉ le 2026-08-15
 
-Ces fonctionnalités traversent déjà tout le pipeline (token → parser → AST → codegen), mais le runtime `OP_CALL_BUILTIN` n'a pas de `case` pour elles. Il suffit d'ajouter un cas dans `src/runtime/runtime.c`.
+> **Statut : 22/22 implémentés et testés** (`tests/test_prioa.bas` = 40/40 OK).
+> Les 22 items traversaient déjà le pipeline (token → parser → AST → codegen) ;
+> il a fallu ajouter les `case` runtime + quelques correctifs transverses ci-dessous.
 
-### Bug critique à corriger (#1)
+### Correctifs transverses apportés pendant la Priorité A
 
-**`==` (approximate equality)** : le token `TOK_APPROX_EQ` existe dans le parser et crée un nœud AST correct, mais le codegen dans `cg_expression()` n'a pas de `case TOK_APPROX_EQ` — le switch tombe dans `default:` qui émet `OP_ADD`. Tout code BASIC utilisant `==` est donc **silencieusement mal compilé**.
+1. **Bug `==` (approximate equality)** : le codegen générait `OP_ADD` pour `TOK_APPROX_EQ`.
+   Corrigé : `OP_APPROX_EQ` (`fabs(a-b)<1e-10`) dans `codegen.c` + `runtime.c`.
+2. **Pile de la VM** : les appels-statement laissaient leur résultat sur la pile, ce qui
+   faisait diverger la détection du nb d'arguments par `sp` dans les builtins.
+   Correctifs : (a) le codegen émet `OP_POP` après un builtin en position statement ;
+   (b) le codegen passe le nb d'arguments dans `operand2` d'`OP_CALL_BUILTIN` ;
+   (c) le runtime garantit après chaque builtin que la pile a consommé exactement
+   ces arguments et porte exactement UN résultat.
+3. **Mémoire virtuelle** : nouveau module `src/runtime/vmem.{h,c}` (16 Mo hôte / 256 Ko MINT,
+   big-endian 68k, wrap d'adresse). `PEEK/DPEEK/LPEEK/POKE/DPOKE/LPOKE/SPOKE/SDPOKE/SLPOKE`
+   et `BYTE{}/CARD{}/WORD{}/LONG{}/SINGLE{}/DOUBLE{}` y accèdent vraiment (fin des stubs).
+   `HIMEM` renvoie la taille de la vmem.
+4. **Lecteur de touches** : tampon `keybuf[32]` dans `gfa_runtime` (+ `gfa_keybuf_pop()`)
+   pour `KEYGET/KEYLOOK/KEYTEST/KEYPAD` ; `os_con_key_available()` (non-consommant) dans `os_layer`.
+5. **Lexer** : ajout des accolades `{}` (`TOK_LBRACE/RBRACE`) pour `BYTE{}` & co, du suffixe `?`
+   (`VAL?/STE?/TT?`), et un correctif critique : les tokens mots-clés laissaient une
+   `ident_name` obsolète (`GOSUB sub` renvoyait un label faux → boucle infinie +
+   débordement de call stack). `free_token_value()` avant chaque scan.
+6. **`PAUSE`** attend réellement une touche (timeout optionnel) et renvoie son code.
+7. **`RANDOM(n) / RAND(n)`** : ajouté à `parse_primary` + case runtime (entier dans [0, n-1]).
 
-**Correctif :**
-1. Ajouter `OP_APPROX_EQ` dans `runtime.h`
-2. Ajouter `case TOK_APPROX_EQ: bc_op = OP_APPROX_EQ; break;` dans `cg_expression()` (codegen.c ~ligne 691)
-3. Implémenter dans runtime : `ABS(a-b) < 1e-10`
-4. Ajouter un test BASIC
+### Correctifs de la 2e vague (2026-08-15) — boucles, OPTION BASE, TOS
 
-### Détail des 22 items
+1. **`DO … LOOP [WHILE|UNTIL]`** : était un **no-op silencieux** (le corps ne s'exécutait
+   jamais, sans aucun message). Implémenté au codegen : `cg_do_loop` avec post-test de
+   condition (WHILE = continuer si vrai, UNTIL = continuer si faux) et saut arrière patché.
+   Le parser marque WHILE/UNTIL dans `node->value.int_val`.
+2. **`EXIT IF` / `EXIT`** : le lexer tokenisait `EXIT` → `TOK_EXIT_IF` + `IF` séparé
+   (erreur de parse). Ajout de `parse_exit_if()` (dispatch statement + dans `DO … LOOP`)
+   et d'une **pile de sorties de boucles** au codegen (`cg_loop_enter/leave`,
+   `exit_patches[]`) : `EXIT IF` sort de la boucle la plus interne (DO, WHILE, FOR, REPEAT).
+3. **`OPTION BASE 0/1`** : la syntaxe réelle échouait au parse (le handler ne consommait
+   pas la ligne). Nouveau parse dédié (`BASE` optionnel) + champ `base` dans la structure
+   de tableau (`gfa_var_array_create`, `OP_ARRAY_LOAD/STORE` appliquent la base avec
+   contrôle de bornes quand base ≠ 0). Les tableaux sans OPTION BASE sont inchangés.
+4. **`GEMDOS()/BIOS()/XBIOS()`** : les opcodes `OP_GEMDOS/BIOS/XBIOS` existaient déjà au
+   runtime mais n'étaient **jamais émis** par le codegen. `cg_call` les émet désormais
+   (le runtime attend `[fn] [arg1] [arg2]` sur la pile).
+
+**Tests ajoutés** : `test_flow.bas` 16→22 (DO/LOOP ×2, EXIT IF dans DO/WHILE/FOR, EXIT
+imbriqué), `test_arcom.bas` 8→9 (OPTION BASE 1), `test_prioa.bas` 40→42 (GEMDOS/BIOS/XBIOS).
+Toutes les 23 suites `.bas` + 5 suites C passent.
+
+### Détail des 22 items (terminés)
 
 | # | Fonction | Token | Parser | Codegen | Runtime | Effort | Fichier |
 |---|----------|-------|--------|---------|---------|--------|---------|
-| 1 | **==** (approx. equality) — **BUG** | ✅ TOK_APPROX_EQ | ✅ AST | ❌ génère OP_ADD ! | ❌ | Petit | `runtime.h`, `runtime.c`, `codegen.c` |
-| 2 | VAL?() | ✅ TOK_VAL_COUNT | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 3 | INPUT$() | ✅ TOK_INPUT_TOK | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 4 | INPMID$() | ✅ TOK_INPMID | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 5 | DIR$() | ✅ TOK_DIR_TOK | ✅ | ✅ | ❌ | Petit | `os_layer.c/h`, `runtime.c` |
-| 6 | DFREE() | ✅ TOK_DFREE | ✅ | ✅ | ❌ | Infime | `os_layer.c/h`, `runtime.c` |
-| 7 | TYPE() | ✅ TOK_TYPE_TOK | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 8 | PAUSE | ✅ TOK_PAUSE | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 9 | DELAY | ✅ TOK_DELAY | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 10 | RANDOMIZE | ✅ TOK_RANDOMIZE | ✅ | ✅ | ❌ | Petit | `runtime.c`, `gfamath.c/h` |
-| 11 | MOUSE/MOUSEX/MOUSEY/MOUSEK/SETMOUSE | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c`, `gfx.c/h` |
-| 12 | STICK/STRIG/PAD*/LPEN*/TOUCH/SPRITE | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c` |
-| 13 | KEYDEF/KEYGET/KEYLOOK/KEYTEST/KEYPRESS/KEYPAD | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c` |
-| 14 | TIMER/DATE$/TIME$ | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c`, `os_layer.c/h` |
-| 15 | _C/_X/_Y | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 16 | BYTE{}/CARD{}/WORD{}/LONG{}/SINGLE{}/DOUBLE{} | ✅ | ✅ | ✅ | ❌ | Petit | `runtime.c` |
-| 17 | HIMEM/FRE() | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 18 | EXIST() | ✅ TOK_EXIST | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 19 | ~ (tilde, NOT bitwise) | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 20 | VOID | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 21 | STE/TT | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
-| 22 | OB_X/OB_Y/OB_W/OB_H | ✅ | ✅ | ✅ | ❌ | Infime | `runtime.c` |
+| 1 | **==** (approx. equality) | ✅ TOK_APPROX_EQ | ✅ AST | ✅ OP_APPROX_EQ | ✅ | Petit | `runtime.h`, `runtime.c`, `codegen.c` |
+| 2 | VAL?() | ✅ TOK_VAL_COUNT | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 3 | INPUT$() | ✅ TOK_INPUT_TOK | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 4 | INPMID$() | ✅ TOK_INPMID | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 5 | DIR$() | ✅ TOK_DIR_TOK | ✅ | ✅ | ✅ | Petit | `os_layer.c/h`, `runtime.c` |
+| 6 | DFREE() | ✅ TOK_DFREE | ✅ | ✅ | ✅ | Infime | `os_layer.c/h`, `runtime.c` |
+| 7 | TYPE() | ✅ TOK_TYPE_TOK | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 8 | PAUSE | ✅ TOK_PAUSE | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 9 | DELAY | ✅ TOK_DELAY | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 10 | RANDOMIZE | ✅ TOK_RANDOMIZE | ✅ | ✅ | ✅ | Petit | `runtime.c`, `gfamath.c/h` |
+| 11 | MOUSE/MOUSEX/MOUSEY/MOUSEK/SETMOUSE | ✅ | ✅ | ✅ | ✅ | Petit | `runtime.c`, `gfx.c/h` |
+| 12 | STICK/STRIG/PAD*/LPEN*/TOUCH/SPRITE | ✅ | ✅ | ✅ | ✅ | Petit | `runtime.c` |
+| 13 | KEYDEF/KEYGET/KEYLOOK/KEYTEST/KEYPRESS/KEYPAD | ✅ | ✅ | ✅ | ✅ | Petit | `runtime.c` |
+| 14 | TIMER/DATE$/TIME$ | ✅ | ✅ | ✅ | ✅ | Petit | `runtime.c`, `os_layer.c/h` |
+| 15 | _C/_X/_Y | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 16 | BYTE{}/CARD{}/WORD{}/LONG{}/SINGLE{}/DOUBLE{} | ✅ | ✅ | ✅ | ✅ | Petit | `runtime.c` |
+| 17 | HIMEM/FRE() | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 18 | EXIST() | ✅ TOK_EXIST | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 19 | ~ (tilde, NOT bitwise) | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 20 | VOID | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 21 | STE/TT | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
+| 22 | OB_X/OB_Y/OB_W/OB_H | ✅ | ✅ | ✅ | ✅ | Infime | `runtime.c` |
 
 ---
 
@@ -128,15 +180,13 @@ Ces fonctionnalités traversent déjà tout le pipeline (token → parser → AS
 
 Nécessitent parser + codegen + runtime + implémentation réelle (backend SDL2 pour les graphismes).
 
-### B1 — Accès mémoire étendu
+### B1 — Accès mémoire étendu — ✅ TERMINÉ (fait pendant la Priorité A, via `vmem.c`)
 
 | # | Fonction | Description | Effort |
 |---|----------|-------------|--------|
-| 1 | SPOKE addr, byte | Écrire un octet en mémoire (nouvel opcode `OP_SPOKE`) | Petit |
-| 2 | SDPOKE addr, word | Écrire un mot (16-bit) en mémoire (`OP_SDPOKE`) | Petit |
-| 3 | SLPOKE addr, long | Écrire un long (32-bit) en mémoire (`OP_SLPOKE`) | Petit |
-
-Parser : ajouter dans `parse_statement()` (similaire à POKE). Codegen : émettre le nouvel opcode. Runtime : écrire via `memory.c`.
+| 1 | SPOKE addr, byte | Écrire un octet en mémoire (`OP_SPOKE`) | ✅ |
+| 2 | SDPOKE addr, word | Écrire un mot (16-bit) en mémoire (`OP_SDPOKE`) | ✅ |
+| 3 | SLPOKE addr, long | Écrire un long (32-bit) en mémoire (`OP_SLPOKE`) | ✅ |
 
 ### B2 — Graphismes avancés (backend SDL2)
 
@@ -192,8 +242,8 @@ Parser : ajouter dans `parse_statement()` (similaire à POKE). Codegen : émettr
 | 33 | FATAL message$ | ❌ Token seulement | Ajouter parser + runtime (print + exit) | Petit |
 | 34 | QSORT array() | ❌ Token seulement | Ajouter parser 1 arg + `qsort()` C | Moyen |
 | 35 | SSORT array() | ❌ Token seulement | Ajouter parser 1 arg + Shell sort | Moyen |
-| 36 | SWAP a,b | ⚠️ Parse comme no-op | Remplacer par véritable swap de variables | Petit |
-| 37 | RANDOM(n) | ❌ Pas dans parse_primary | Ajouter token dans builtins + runtime | Infime |
+| 36 | SWAP a,b | ✅ Fonctionne (test_swap.bas) | — | — |
+| 37 | RANDOM(n) | ✅ Fait pendant la Priorité A | — | — |
 | 38 | DELETE x(i) | ❌ Token seulement | Suppression d'élément dans tableau | Moyen |
 | 39 | INSERT x(i), val | ❌ Token seulement | Insertion d'élément dans tableau | Moyen |
 

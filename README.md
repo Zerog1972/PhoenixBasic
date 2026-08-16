@@ -151,19 +151,19 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 
 | Catégorie | Détail |
 |-----------|--------|
-| **Contrôle de flux** | IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP/DOWNTO, WHILE/WEND, REPEAT/UNTIL, SELECT/CASE/ENDSELECT, GOTO/GOSUB/RETURN/@, DO/LOOP, EXIT IF, ON x GOTO/GOSUB, STOP, END, QUIT |
+| **Contrôle de flux** | IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, WHILE/WEND, REPEAT/UNTIL, SELECT/CASE/ENDSELECT, GOTO/GOSUB/RETURN/@, DO/LOOP [WHILE\|UNTIL], EXIT IF, ON x GOTO/GOSUB, STOP, END, QUIT |
 | **Procédures/Fonctions** | PROCEDURE, FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`) |
-| **Tableaux 1D** | DIM, ERASE, ARRAYFILL, DIM?, OPTION BASE |
+| **Tableaux 1D** | DIM, OPTION BASE 0/1 (base des indices), ERASE/ARRAYFILL/DIM? non implémentés |
 | **Opérateurs** | `+` `-` `*` `/` `^` `=` `<>` `<` `>` `<=` `>=` AND OR XOR NOT EQV IMP MOD DIV, & (concat) |
 | **Mathématiques** | 35 fonctions : SIN/COS/TAN/ATN/ASIN/ACOS/SINQ/COSQ/SINH/COSH/TANH, EXP/LOG/LOG10/SQR, ABS/SGN/INT/FRAC/FIX/ROUND/CEIL/TRUNC, MIN/MAX/EVEN/ODD/PRED/SUCC, FACT/COMBIN/VARIAT, RND, DEG/RAD, CFLOAT/CINT |
 | **Chaînes** | 28 fonctions : LEN, ASC, CHR$, VAL, VAL?, LEFT$/RIGHT$/MID$, INSTR, RINSTR, UPPER$/LCASE$/LOWER$, TRIM$, STR$, BIN$, HEX$, OCT$, SPACE$, STRING$, MKI$/MKL$/MKS$/MKF$/MKD$, CVI/CVL/CVS/CVF/CVD |
 | **Opérateurs bits** | BTST, BSET, BCLR, BCHG, SHL, SHR, ROL, ROR |
-| **Print** | PRINT, PRINT #, PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, LINE INPUT, INKEY$, CLS, LOCATE, HTAB, VTAB |
+| **Print** | PRINT, PRINT #, PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, INKEY$, CLS, LOCATE |
 | **Fichiers** | OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#/INPUT# |
-| **Mémoire** | PEEK/POKE/DPEEK/DPOKE/LPEEK/LPOKE, DATA/READ/RESTORE, MALLOC/MFREE, BLOAD/BSAVE/BGET/BPUT |
+| **Mémoire** | PEEK/POKE/DPEEK/DPOKE/LPEEK/LPOKE (vmem), DATA/READ/RESTORE, MALLOC (partiel), BSAVE (stub) |
 | **Graphismes SDL2** | COLOR (palette 16 couleurs), LINE, BOX, PBOX, CIRCLE, PCIRCLE |
 | **Son** | BEEP, SOUND ch, freq, dur, vol, env |
-| **Événements** | EVERY, AFTER, ON ERROR, ON BREAK, ERROR, ERR |
+| **Événements** | EVERY, AFTER, ON ERROR, ERROR, ERR |
 | **Debug** | TRON, TROFF |
 | **Édition** | LIST avec indentation, EDIT en place (← → Home End Bksp Del), INSERT, DELETE, LOAD/SAVE |
 
@@ -193,9 +193,10 @@ et le plan de travail priorisé.
 
 | Priorité | Nb items | Effort | Description |
 |----------|----------|--------|-------------|
-| **✅ Implémenté** | ~130 | — | Flux, procédures, maths, chaînes, bits, print AT/USING, conversion binaire, fichiers, graphismes SDL2, TOS partiel |
-| **🔜 Priorité A** | 22 | ~2-3 jours | Runtime cases uniquement : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, == (bug fix), etc. |
-| **🔜 Priorité B** | 40 | ~5-7 jours | Parser + codegen + runtime : SPOKE, graphismes avancés (PLOT, DRAW, TEXT, POLYLINE, FILL, BITBLT…), SETTIME, SWAP, QSORT |
+| **✅ Implémenté** | ~155 | — | Flux, procédures, maths, chaînes, bits, print AT/USING, conversion binaire, fichiers, graphismes, TOS partiel, vmem (PEEK/POKE réels) |
+| **✅ Priorité A** | 22/22 | fait (2026-08-15) | Runtime cases : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, ==, RAND(n), PEEK/POKE via vmem… |
+| **✅ Correctifs boucles/TOS** | 4 | fait (2026-08-15) | DO/LOOP [WHILE\|UNTIL] (était no-op silencieux), EXIT IF (parser+codegen, toutes boucles), OPTION BASE 0/1 (parse + base des tableaux), GEMDOS()/BIOS()/XBIOS() (opcodes câblés au codegen) |
+| **🔜 Priorité B** | 35 | ~5-7 jours | Parser + codegen + runtime : graphismes avancés (PLOT, DRAW, TEXT, POLYLINE, FILL, BITBLT…), SETTIME, QSORT, INSERT/DELETE |
 | **⏳ Priorité C** | 10 | ~4-8 semaines | Nouveaux sous-systèmes : GEM AES, VDI, MAT, FIELD, SHEL, CHAIN |
 
 ## Limitations
@@ -207,3 +208,7 @@ et le plan de travail priorisé.
 | GEM AES | APPL_INIT/EXIT ok. FORM_ALERT, MENU_BAR, WIND_*, EVNT_* sont des stubs (retournent 0). Voir PLAN.md |
 | RESTORE label | Parse OK mais la restauration est globale (le label est ignoré au runtime) |
 | `:` séparateur | Non supporté — une ligne = une instruction (conforme au vrai GFA Basic 3.5) |
+| Lignes numérotées | Non supportées (`10 PRINT …`). Utiliser des étiquettes nommées (`deb:` / `GOTO deb`) : le lexer ne reconnaît pas un nombre en début de ligne comme numéro de ligne |
+| `FOR … DOWNTO` | Non implémentée (erreur de parse) — utiliser une boucle WHILE avec décrément |
+| `ERASE` / `CLEAR` / `ON BREAK` | Parsées mais sans effet (no-op) — les valeurs survivent |
+| `LINE INPUT`, `HTAB`, `VTAB`, `UCASE$` | Non implémentés (erreur de parse ou runtime error 9) — `LINE INPUT` échoue car `LINE` est lexée comme le mot-clé graphique |
