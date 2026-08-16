@@ -598,6 +598,12 @@ void os_mem_set(void *dst, int c, size_t n);
 char* os_strdup(const char *s);
 
 /*
+ * os_str_iequal — Comparaison de deux chaines insensible a la casse.
+ * Retourne 1 si egales (les deux NULL inclus), sinon 0.
+ */
+int os_str_iequal(const char *a, const char *b);
+
+/*
  * os_mem_available — Retourne la mémoire disponible en octets.
  * Équivalent FRE(0).
  * total : si non nul, retourne la mémoire totale.

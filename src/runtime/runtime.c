@@ -1031,7 +1031,7 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     double denom = gfa_value_to_float(v2);
                     if (fabs(denom) < 1.0e-15) {
-                        if (!runtime_error(rt, 0, "Division by zero")) {
+                        if (!runtime_error(rt, 11, "Division by zero")) {
                             os_mem_free(v1); os_mem_free(v2);
                             return -1;
                         }
@@ -1050,7 +1050,7 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     lval = gfa_value_to_long(v2);
                     if (lval == 0) {
-                        if (!runtime_error(rt, 0, "Division by zero")) {
+                        if (!runtime_error(rt, 11, "Division by zero")) {
                             os_mem_free(v1); os_mem_free(v2);
                             return -1;
                         }
@@ -1069,7 +1069,7 @@ static int execute_instruction(gfa_runtime *rt)
                 if (v1 && v2) {
                     lval = gfa_value_to_long(v2);
                     if (lval == 0) {
-                        if (!runtime_error(rt, 0, "Division by zero")) {
+                        if (!runtime_error(rt, 11, "Division by zero")) {
                             os_mem_free(v1); os_mem_free(v2);
                             return -1;
                         }
@@ -2551,6 +2551,11 @@ static int execute_instruction(gfa_runtime *rt)
                             const char *t = os_time_get_time();
                             gfa_value_push_string(rt, gfa_str_new(t ? t : ""), 1);
                         }
+                        break;
+
+                    /* ERR - code du dernier ERROR/FATAL declenche (0 sinon) */
+                    case TOK_ERR:
+                        gfa_value_push_long(rt, gfa_error_get());
                         break;
 
                     /* _C / _X / _Y - couleur courante, curseur X, curseur Y */
@@ -4049,10 +4054,43 @@ static int execute_instruction(gfa_runtime *rt)
             break;
 
         case OP_ON_ERROR:
-            /* operand = resolved IP address of error handler label */
-            rt->error_label = (int)operand;
-            rt->on_error_active = (operand >= 0) ? 1 : 0;
-            gfa_on_error_gosub((int)operand);
+            /* operand = IP resolu (si >= 0) ; sinon operand2.int_val2
+               = index de chaine du label, resolu ici par scan des OP_LABEL. */
+            {
+                int str_idx = -1;
+                int label_ip = -1;
+                int i;
+
+                if (operand >= 0) {
+                    label_ip = operand;
+                } else if (inst->has_operand2
+                           && inst->operand2.int_val2 >= 0
+                           && rt->program) {
+                    str_idx = inst->operand2.int_val2;
+                    {
+                        const char *target =
+                            (str_idx >= 0 && str_idx < rt->program->str_count)
+                                ? rt->program->strings[str_idx] : NULL;
+                        for (i = 0; i < rt->program->length; i++) {
+                            const char *lbl = NULL;
+                            int s2 = rt->program->code[i].operand.int_val;
+                            if (rt->program->code[i].opcode != OP_LABEL)
+                                continue;
+                            if (s2 >= 0 && s2 < rt->program->str_count)
+                                lbl = rt->program->strings[s2];
+                            if (target != NULL && lbl != NULL
+                                && (s2 == str_idx
+                                    || os_str_iequal(target, lbl))) {
+                                label_ip = i;
+                                break;
+                            }
+                        }
+                    }
+                }
+                rt->error_label = label_ip;
+                rt->on_error_active = (label_ip >= 0) ? 1 : 0;
+                gfa_on_error_gosub(label_ip);
+            }
             break;
 
         case OP_EVERY:

@@ -1556,6 +1556,18 @@ char* os_strdup(const char *s)
     return dup;
 }
 
+int os_str_iequal(const char *a, const char *b)
+{
+    if (a == NULL || b == NULL) return (a == b);
+    while (*a && *b) {
+        if (toupper((unsigned char)*a) != toupper((unsigned char)*b))
+            return 0;
+        a++;
+        b++;
+    }
+    return (*a == '\0' && *b == '\0') ? 1 : 0;
+}
+
 os_int32 os_mem_available(os_int32 *total)
 {
     /*

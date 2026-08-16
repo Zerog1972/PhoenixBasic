@@ -1103,14 +1103,24 @@ static ast_node *parse_statement(gfa_parser *parser)
                 gfa_lexer_next(parser->lexer);  /* consommer ON */
                 if (gfa_lexer_current_token(parser->lexer) == TOK_ERROR) {
                     ast_node *node;
+                    const char *label_name;
                     node = ast_create(AST_ON_ERROR);
                     gfa_lexer_next(parser->lexer);  /* consommer ERROR */
                     if (gfa_lexer_current_token(parser->lexer) == TOK_GOSUB ||
                         gfa_lexer_current_token(parser->lexer) == TOK_GOTO) {
                         gfa_lexer_next(parser->lexer);
-                        if (parser->lexer->current.type == TOK_IDENTIFIER) {
+                        /* Accepter tout token comme nom de label
+                           (ex : "err" est le mots-cle TOK_ERR) */
+                        label_name = NULL;
+                        if (parser->lexer->current.value.ident_name != NULL) {
+                            label_name = parser->lexer->current.value.ident_name;
+                        } else {
+                            label_name = gfa_keyword_get_name(
+                                parser->lexer->current.type);
+                        }
+                        if (label_name != NULL && label_name[0] != '\0') {
                             ast_add_child(node, ast_create_ident(AST_ASSIGN,
-                                parser->lexer->current.value.ident_name));
+                                label_name));
                         }
                         gfa_lexer_next(parser->lexer);
                     }
