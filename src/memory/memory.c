@@ -467,16 +467,11 @@ gfa_variable *gfa_var_array_create(gfa_symbol_table *table,
         total *= dim_sizes[i];
     }
 
-    /* Taille d'un element selon le type */
-    switch (elem_type) {
-        case GFA_VAR_BOOL:   elem_size = 1; break;
-        case GFA_VAR_BYTE:   elem_size = 1; break;
-        case GFA_VAR_WORD:   elem_size = 2; break;
-        case GFA_VAR_LONG:   elem_size = 4; break;
-        case GFA_VAR_FLOAT:  elem_size = 8; break;
-        case GFA_VAR_STRING: elem_size = (os_int32)sizeof(char *); break;
-        default:             elem_size = 8; break;
-    }
+    /* Stockage physique uniforme : tous les elements sont des doubles
+       (les opcodes ARRAY_*, MAT, QSORT/INSERT/DELETE travaillent sur
+       double *). Le type logique (elem_type) s'applique en conversion
+       a l'ecriture / a la lecture (voir OP_ARRAY_STORE / OP_ARRAY_LOAD). */
+    elem_size = (os_int32)sizeof(double);
 
     /* Creer la variable */
     var = gfa_var_create(table, name, GFA_VAR_ARRAY);
@@ -546,35 +541,29 @@ void gfa_var_array_fill(gfa_variable *var, double value)
 {
     os_int32 i;
     char *data;
+    double cv;
+    gfa_var_type et;
 
     if (var == NULL || var->type != GFA_VAR_ARRAY) return;
 
     data = var->value.arr.data;
     if (data == NULL) return;
 
-    for (i = 0; i < var->value.arr.total_elements; i++) {
-        void *elem;
-        elem = (void *)(data + (size_t)(i * var->value.arr.element_size));
+    /* Convertir la valeur de remplissage selon le type logique */
+    et = var->value.arr.elem_type;
+    cv = value;
+    if (et == GFA_VAR_BOOL)
+        cv = (value != 0.0) ? 255.0 : 0.0;
+    else if (et == GFA_VAR_BYTE)
+        cv = (double)((unsigned long)(long)value & 0xFFUL);
+    else if (et == GFA_VAR_WORD) {
+        unsigned long u = (unsigned long)(long)value & 0xFFFFUL;
+        cv = (u > 32767UL) ? (double)(long)(u - 65536UL)
+                           : (double)(long)u;
+    }
 
-        switch (var->value.arr.elem_type) {
-            case GFA_VAR_BOOL:
-                *(os_byte *)elem = (os_byte)((value != 0.0) ? 255 : 0);
-                break;
-            case GFA_VAR_BYTE:
-                *(os_byte *)elem = (os_byte)((unsigned long)value & 0xFF);
-                break;
-            case GFA_VAR_WORD:
-                *(os_int16 *)elem = (os_int16)((long)value & 0xFFFF);
-                break;
-            case GFA_VAR_LONG:
-                *(os_int32 *)elem = (os_int32)(long)value;
-                break;
-            case GFA_VAR_FLOAT:
-                *(double *)elem = value;
-                break;
-            default:
-                break;
-        }
+    for (i = 0; i < var->value.arr.total_elements; i++) {
+        ((double *)data)[i] = cv;
     }
 }
 
@@ -582,6 +571,29 @@ os_int32 gfa_var_array_count(gfa_variable *var)
 {
     if (var == NULL || var->type != GFA_VAR_ARRAY) return 0;
     return var->value.arr.total_elements;
+}
+
+/* ------------------------------------------------------------------ */
+/* Type d'une variable a partir du suffixe de son nom                 */
+/* ------------------------------------------------------------------ */
+
+gfa_var_type gfa_var_type_from_name(const char *name)
+{
+    size_t len;
+
+    if (name == NULL) return GFA_VAR_FLOAT;
+    len = strlen(name);
+    if (len == 0) return GFA_VAR_FLOAT;
+
+    switch (name[len - 1]) {
+        case '$': return GFA_VAR_STRING;
+        case '%': return GFA_VAR_LONG;
+        case '&': return GFA_VAR_WORD;
+        case '!': return GFA_VAR_BOOL;
+        case '|': return GFA_VAR_BYTE;
+        case '#': return GFA_VAR_FLOAT;
+        default:  return GFA_VAR_FLOAT;
+    }
 }
 
 /* ------------------------------------------------------------------ */

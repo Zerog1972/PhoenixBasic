@@ -838,7 +838,16 @@ static int execute_instruction(gfa_runtime *rt)
                         flat_index += indices[di] * stride;
                         stride *= var->value.arr.dim_sizes[di];
                     }
-                    gfa_value_push_float(rt, base[flat_index]);
+                    /* Pousser selon le type logique des elements */
+                    {
+                        double fv = base[flat_index];
+                        gfa_var_type et = var->value.arr.elem_type;
+                        if (et == GFA_VAR_BYTE || et == GFA_VAR_WORD ||
+                            et == GFA_VAR_LONG)
+                            gfa_value_push_long(rt, (os_int32)(long)fv);
+                        else
+                            gfa_value_push_float(rt, fv);
+                    }
                 } else {
                     gfa_value_push_float(rt, 0.0);
                 }
@@ -909,7 +918,23 @@ static int execute_instruction(gfa_runtime *rt)
                         flat_index += indices[di] * stride;
                         stride *= var->value.arr.dim_sizes[di];
                     }
-                    base[flat_index] = gfa_value_to_float(val);
+                    /* Conversion selon le type logique des elements */
+                    {
+                        double fv = gfa_value_to_float(val);
+                        gfa_var_type et = var->value.arr.elem_type;
+                        if (et == GFA_VAR_BYTE) {
+                            long lv = gfa_value_to_long(val);
+                            fv = (double)((unsigned long)lv & 0xFFUL);
+                        } else if (et == GFA_VAR_WORD) {
+                            unsigned long u =
+                                (unsigned long)gfa_value_to_long(val)
+                                & 0xFFFFUL;
+                            fv = (u > 32767UL)
+                                ? (double)(long)(u - 65536UL)
+                                : (double)(long)u;
+                        }
+                        base[flat_index] = fv;
+                    }
                 }
                 if (val != NULL) os_mem_free(val);
             }
@@ -4805,8 +4830,11 @@ static int execute_instruction(gfa_runtime *rt)
                     dv = gfa_var_lookup(rt->globals, name);
                     if (dv == NULL || dv->type != GFA_VAR_ARRAY ||
                         dv->value.arr.data == NULL) {
+                        gfa_var_type et = gfa_var_type_from_name(name);
+                        if (et == GFA_VAR_STRING || et == GFA_VAR_BOOL)
+                            et = GFA_VAR_FLOAT;  /* tableaux numeriques */
                         gfa_var_array_create(rt->globals, name,
-                                             GFA_VAR_FLOAT, ndim, dims, 0);
+                                             et, ndim, dims, 0);
                     }
                 }
             }

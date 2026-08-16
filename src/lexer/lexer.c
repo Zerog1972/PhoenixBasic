@@ -632,11 +632,37 @@ static gfa_token_type scan_number(gfa_lexer *lexer)
         }
     }
 
-    /* Si suivi d'un % & | ! # $, c'est un suffixe de type -> nombre + suffixe */
-    if (c == '%' || c == '&' || c == '|' || c == '!' || c == '#' || c == '$') {
-        /* Le suffixe sera traite comme un token identifiant/nombre type */
-        /* Pour l'instant, on le laisse pour le parser */
-        is_float = (c == '#' || c == '!');
+    /* Suffixe de type du littéral : %, &, |, !, #, $, ?
+       Consommer le caractere et typer la valeur (GFA : 100%, 30&, 255|, 2.5#, 123$). */
+    if (c == '%' || c == '&' || c == '|' || c == '!' || c == '#'
+        || c == '$' || c == '?') {
+        char suffix = c;
+        long v;
+
+        ADVANCE(lexer);
+
+        buf[i] = '\0';
+        lexer->current.line = start_line;
+        lexer->current.column = start_col;
+
+        if (suffix == '$') {
+            /* Littéral chaine : "123$" -> "123" */
+            lexer->current.value.string_value = os_strdup(buf);
+            return TOK_STRING;
+        }
+        if (suffix == '#' || suffix == '!' || suffix == '?') {
+            lexer->current.value.float_value = atof(buf);
+            return TOK_FLOAT;
+        }
+        v = atol(buf);
+        if (suffix == '&') {
+            unsigned long u = (unsigned long)v & 0xFFFFUL;
+            v = (u > 32767UL) ? (long)(u - 65536UL) : (long)u;
+        } else if (suffix == '|') {
+            v = (long)((unsigned long)v & 0xFFUL);
+        }
+        lexer->current.value.int_value = v;
+        return TOK_INTEGER;
     }
 
     buf[i] = '\0';

@@ -106,26 +106,12 @@ static gfa_variable *cg_resolve_var(codegen_ctx *ctx, const char *name)
 {
     gfa_variable *var;
     gfa_var_type vtype;
-    int len;
 
     if (name == NULL) return NULL;
     var = gfa_var_lookup(ctx->sym, name);
     if (var != NULL) return var;
 
-    len = (int)strlen(name);
-    if (len > 0) {
-        switch (name[len - 1]) {
-            case '$': vtype = GFA_VAR_STRING; break;
-            case '%': vtype = GFA_VAR_LONG;   break;
-            case '&': vtype = GFA_VAR_WORD;   break;
-            case '!': vtype = GFA_VAR_BOOL;   break;
-            case '|': vtype = GFA_VAR_BYTE;   break;
-            case '#': vtype = GFA_VAR_FLOAT;  break;
-            default:  vtype = GFA_VAR_FLOAT;  break;
-        }
-    } else {
-        vtype = GFA_VAR_FLOAT;
-    }
+    vtype = gfa_var_type_from_name(name);
     return gfa_var_create(ctx->sym, name, vtype);
 }
 
@@ -641,8 +627,11 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
               }
               if (ndim > 0) {
                   int i;
+                  gfa_var_type et = gfa_var_type_from_name(name_node->value.ident);
+                  if (et == GFA_VAR_STRING || et == GFA_VAR_BOOL)
+                      et = GFA_VAR_FLOAT;  /* tableaux numeriques uniquement */
                   gfa_var_array_create(ctx->sym, name_node->value.ident,
-                                       GFA_VAR_FLOAT, ndim, dims,
+                                       et, ndim, dims,
                                        (os_int32)ctx->option_base);
                   /* OP_DIM runtime : recree le tableau apres ERASE */
                   for (i = 0; i < ndim; i++)

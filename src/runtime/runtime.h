@@ -583,6 +583,13 @@ gfa_variable *gfa_var_array_create(gfa_symbol_table *table,
                                     os_int32 base);
 
 /*
+ * gfa_var_type_from_name - Type GFA d'une variable d'apres le suffixe
+ * du dernier caractere de son nom ($=chaine, %=long, &=word,
+ * |=byte, !=bool, # ou aucun=flottant).
+ */
+gfa_var_type gfa_var_type_from_name(const char *name);
+
+/*
  * gfa_var_array_get_element - Retourne un pointeur vers l'element
  * d'un tableau multidimensionnel.
  */
