@@ -312,7 +312,7 @@ static void test_arrays(void)
     sizes[0] = 3; sizes[1] = 4;
 
     arr = gfa_var_array_create(rt->globals, "matrice",
-                                GFA_VAR_FLOAT, 2, sizes);
+                                GFA_VAR_FLOAT, 2, sizes, 0);
     TEST_ASSERT(arr != NULL, "2D array created");
     TEST_ASSERT(arr->type == GFA_VAR_ARRAY, "Type is ARRAY");
     TEST_ASSERT(arr->value.arr.num_dims == 2, "2 dimensions");
@@ -886,19 +886,18 @@ static void test_builtin_math(void)
                 "COMBIN(5,2) = 10");
     gfa_runtime_shutdown(rt);
 
-    /* VARIAT(5,2) = 20 */
+    /* VARIAT(5) = 120 (factorielle — sémantique GFA 1 argument) */
     rt = gfa_runtime_init();
     bc = gfa_bytecode_create();
     gfa_var_create(rt->globals, "r", GFA_VAR_FLOAT);
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, (double)5);
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, (double)2);
     gfa_bytecode_emit_int(bc, OP_CALL_BUILTIN, (os_int32)TOK_VARIAT);
     emit_ptr(bc, OP_POP_STORE, gfa_var_lookup(rt->globals, "r"));
     gfa_bytecode_emit(bc, OP_END);
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(gfa_var_get_as_float(gfa_var_lookup(rt->globals, "r")) == 20.0,
-                "VARIAT(5,2) = 20");
+    TEST_ASSERT(gfa_var_get_as_float(gfa_var_lookup(rt->globals, "r")) == 120.0,
+                "VARIAT(5) = 120");
     gfa_runtime_shutdown(rt);
 }
 
@@ -1403,8 +1402,8 @@ static void test_memory(void)
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
 
-    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "result")) == 12345,
-                "PEEK(12345) pushes back the address as long");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "result")) == 42,
+                "PEEK(12345) renvoie la valeur ecrite par POKE");
 
     gfa_runtime_shutdown(rt);
 
@@ -1426,8 +1425,8 @@ static void test_memory(void)
 
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 1000,
-                "DPEEK(1000) pushes back the address");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 65,
+                "DPEEK(1000) renvoie le mot ecrit par DPOKE");
     gfa_runtime_shutdown(rt);
 
     rt = gfa_runtime_init();
@@ -1446,8 +1445,8 @@ static void test_memory(void)
 
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 2000,
-                "LPEEK(2000) pushes back the address");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 123456,
+                "LPEEK(2000) renvoie le long ecrit par LPOKE");
     gfa_runtime_shutdown(rt);
 
     /* Test SPOKE/SDPOKE/SLPOKE */
@@ -1455,55 +1454,57 @@ static void test_memory(void)
     bc = gfa_bytecode_create();
     gfa_var_create(rt->globals, "r", GFA_VAR_LONG);
 
-    /* SPOKE 500, 77 - no-crash stub test */
+    /* SPOKE 500, 77 puis lecture PEEK(500) -> 77 */
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 500.0);
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 77.0);
     gfa_bytecode_emit(bc, OP_SPOKE);
-    /* SPOKE 600, 88 - second test */
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 600.0);
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 88.0);
-    gfa_bytecode_emit(bc, OP_SPOKE);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 500.0);
+    gfa_bytecode_emit(bc, OP_PEEK);
+    emit_ptr(bc, OP_POP_STORE, gfa_var_lookup(rt->globals, "r"));
     gfa_bytecode_emit(bc, OP_END);
 
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(1, "SPOKE 500,77 and SPOKE 600,88 do not crash");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 77,
+                "SPOKE 500,77 puis PEEK(500) renvoie 77");
     gfa_runtime_shutdown(rt);
 
     rt = gfa_runtime_init();
     bc = gfa_bytecode_create();
+    gfa_var_create(rt->globals, "r", GFA_VAR_LONG);
 
-    /* SDPOKE 1000, 65535 - no-crash stub test */
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 1000.0);
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 65535.0);
-    gfa_bytecode_emit(bc, OP_SDPOKE);
-    /* SDPOKE 2000, 42 */
+    /* SDPOKE 2000, 42 puis lecture DPEEK(2000) -> 42 */
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 2000.0);
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 42.0);
     gfa_bytecode_emit(bc, OP_SDPOKE);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 2000.0);
+    gfa_bytecode_emit(bc, OP_DPEEK);
+    emit_ptr(bc, OP_POP_STORE, gfa_var_lookup(rt->globals, "r"));
     gfa_bytecode_emit(bc, OP_END);
 
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(1, "SDPOKE 1000,65535 and SDPOKE 2000,42 do not crash");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 42,
+                "SDPOKE 2000,42 puis DPEEK(2000) renvoie 42");
     gfa_runtime_shutdown(rt);
 
     rt = gfa_runtime_init();
     bc = gfa_bytecode_create();
+    gfa_var_create(rt->globals, "r", GFA_VAR_LONG);
 
-    /* SLPOKE 3000, 1234567 - no-crash stub test */
+    /* SLPOKE 3000, 1234567 puis lecture LPEEK(3000) -> 1234567 */
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 3000.0);
     gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 1234567.0);
     gfa_bytecode_emit(bc, OP_SLPOKE);
-    /* SLPOKE 4000, 890123 */
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 4000.0);
-    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 890123.0);
-    gfa_bytecode_emit(bc, OP_SLPOKE);
+    gfa_bytecode_emit_float(bc, OP_PUSH_CONST, 3000.0);
+    gfa_bytecode_emit(bc, OP_LPEEK);
+    emit_ptr(bc, OP_POP_STORE, gfa_var_lookup(rt->globals, "r"));
     gfa_bytecode_emit(bc, OP_END);
 
     gfa_runtime_load(rt, bc);
     gfa_runtime_execute(rt);
-    TEST_ASSERT(1, "SLPOKE 3000,1234567 and SLPOKE 4000,890123 do not crash");
+    TEST_ASSERT(gfa_var_get_as_long(gfa_var_lookup(rt->globals, "r")) == 1234567,
+                "SLPOKE 3000,1234567 puis LPEEK(3000) renvoie 1234567");
     gfa_runtime_shutdown(rt);
 }
 

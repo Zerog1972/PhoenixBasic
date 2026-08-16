@@ -98,6 +98,16 @@ check_cond = (i = 30)
 check_num = 8
 GOSUB check
 
+' --- 9. OPTION BASE 1 (indice bas = 1) ---
+OPTION BASE 1
+DIM bbase(10)
+bbase(1) = 42
+bbase(10) = 8
+q = bbase(1) + bbase(10)
+check_cond = (q = 50)
+check_num = 9
+GOSUB check
+
 PRINT ""
 PRINT "================================"
 PRINT "Resultats : "
@@ -105,7 +115,7 @@ PRINT passed
 PRINT " / "
 PRINT passed + failed
 PRINT " tests OK"
-IF passed = 8
+IF passed = 9
   PRINT "*** TOUS LES TESTS OK ***"
 ELSE
   PRINT "*** ECHECS ***"

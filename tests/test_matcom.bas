@@ -229,6 +229,11 @@ check_cond = (e >= 0) AND (e <= 1)
 check_num = 40
 GOSUB check
 
+' --- 41. VARIAT 1-argument (factorielle) ---
+check_cond = VARIAT(5) = 120
+check_num = 41
+GOSUB check
+
 PRINT ""
 PRINT "================================"
 PRINT "Resultats : "
@@ -236,7 +241,7 @@ PRINT passed
 PRINT " / "
 PRINT passed + failed
 PRINT " tests OK"
-IF passed = 40
+IF passed = 41
   PRINT "*** TOUS LES TESTS OK ***"
 ELSE
   PRINT "*** ECHECS ***"

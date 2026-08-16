@@ -1,5 +1,6 @@
 ' ============================================================
-' Tests FOR/NEXT, WHILE/WEND, REPEAT/UNTIL, DO/LOOP, SELECT/CASE
+' Tests FOR/NEXT, WHILE/WEND, REPEAT/UNTIL, DO/LOOP, EXIT IF,
+' SELECT/CASE
 ' GFA Basic 3.5
 ' ============================================================
 
@@ -263,6 +264,85 @@ NEXT i
 ' Total = 27+33 = 60
 check_cond = sum = 60
 check_num = 16
+GOSUB check
+
+' ============================================================
+' 17. DO/LOOP WHILE (post-test : s'execute au moins une fois)
+' ============================================================
+i = 0
+DO
+  i = i + 1
+LOOP WHILE i < 5
+check_cond = i = 5
+check_num = 17
+GOSUB check
+
+' ============================================================
+' 18. DO/LOOP UNTIL
+' ============================================================
+i = 0
+DO
+  i = i + 1
+LOOP UNTIL i >= 5
+check_cond = i = 5
+check_num = 18
+GOSUB check
+
+' ============================================================
+' 19. DO/LOOP sans condition (bucle controlee par EXIT IF)
+' ============================================================
+i = 0
+sum = 0
+DO
+  i = i + 1
+  sum = sum + i
+  EXIT IF i >= 4
+LOOP
+check_cond = i = 4 AND sum = 10
+check_num = 19
+GOSUB check
+
+' ============================================================
+' 20. EXIT IF dans WHILE/WEND
+' ============================================================
+i = 0
+WHILE i < 100
+  i = i + 1
+  EXIT IF i >= 3
+WEND
+check_cond = i = 3
+check_num = 20
+GOSUB check
+
+' ============================================================
+' 21. EXIT IF dans FOR/NEXT
+' ============================================================
+sum = 0
+FOR i = 1 TO 100
+  sum = sum + i
+  EXIT IF i >= 4
+NEXT i
+check_cond = sum = 10
+check_num = 21
+GOSUB check
+
+' ============================================================
+' 22. EXIT ne quitte que la boucle la plus interne
+' ============================================================
+outer = 0
+FOR o = 1 TO 2
+  outer = outer + 1
+  i = 0
+  DO
+    i = i + 1
+    EXIT IF i >= 3
+  LOOP
+  outer = outer + i
+NEXT o
+' o=1: outer=1, boucle interne arrete a i=3, outer=1+3=4
+' o=2: outer=4+1=5, i=3, outer=5+3=8
+check_cond = outer = 8
+check_num = 22
 GOSUB check
 
 ' ============================================================
