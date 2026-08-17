@@ -186,8 +186,14 @@ typedef struct {
 static os_channel_entry g_channels[OS_MAX_CHANNELS];
 
 /* Buffer pour os_dir_first/next (emulation FSFIRST/FSNEXT) */
+#ifndef _WIN32
 static char            g_dir_pattern[256];
+#endif
 static int             g_dir_attr_mask;
+#ifdef _WIN32
+/* Handle Windows persistant pour l'iteration FindFirst/FindNext */
+static HANDLE          g_dir_handle = INVALID_HANDLE_VALUE;
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Fonctions utilitaires internes                                     */
@@ -946,6 +952,39 @@ char* os_dir_getcwd(int *len)
     }
 }
 
+#ifdef _WIN32
+/* Copie un WIN32_FIND_DATA vers os_file_info (nom tronque a 8.3) */
+static int dir_fill_from_find(const WIN32_FIND_DATA *fd, os_file_info *info)
+{
+    SYSTEMTIME st;
+    strncpy(info->name, fd->cFileName, 13);
+    info->name[13] = '\0';
+    /* Conversion des attributs Windows vers le format GFA
+       (bit 0 = archive, bit 1 = lecture seule). */
+    {
+        unsigned long wa = fd->dwFileAttributes;
+        os_byte ga = 0;
+        if (wa & 0x20UL) ga |= 0x01;  /* FILE_ATTRIBUTE_ARCHIVE  */
+        if (wa & 0x01UL) ga |= 0x02;  /* FILE_ATTRIBUTE_READONLY */
+        info->attr = ga;
+    }
+    info->size = (os_int32)fd->nFileSizeLow;
+    FileTimeToSystemTime(&fd->ftLastWriteTime, &st);
+    info->date = (os_word)(((st.wYear - 1980) << 9) |
+                           (st.wMonth << 5) | st.wDay);
+    info->time = (os_word)((st.wHour << 11) | (st.wMinute << 5) |
+                           (st.wSecond / 2));
+    return 0;
+}
+
+/* 1 si le nom est "." ou ".." (a sauter dans l'iteration) */
+static int dir_name_is_dot(const char *n)
+{
+    return (n[0] == '.' && (n[1] == '\0' ||
+           (n[1] == '.' && n[2] == '\0')));
+}
+#endif
+
 int os_dir_first(const char *pattern, int attr, os_file_info *info)
 {
     if (pattern == NULL || info == NULL) {
@@ -956,40 +995,30 @@ int os_dir_first(const char *pattern, int attr, os_file_info *info)
 #ifdef _WIN32
     {
         WIN32_FIND_DATA find_data;
-        HANDLE hFind;
 
-        hFind = FindFirstFile(pattern, &find_data);
-        if (hFind == INVALID_HANDLE_VALUE) {
+        if (g_dir_handle != INVALID_HANDLE_VALUE) {
+            FindClose(g_dir_handle);
+            g_dir_handle = INVALID_HANDLE_VALUE;
+        }
+        g_dir_attr_mask = attr;
+        g_dir_handle = FindFirstFileA(pattern, &find_data);
+        if (g_dir_handle == INVALID_HANDLE_VALUE) {
             g_last_error = OS_ERR_NO_MORE_FILES;
             return OS_ERR_NO_MORE_FILES;
         }
-
-        /* Stocker le handle pour les appels suivants */
-        /* Approche simplifiee : utilisation d'une statique */
-
-        strncpy(g_dir_pattern, pattern, sizeof(g_dir_pattern) - 1);
-        g_dir_pattern[sizeof(g_dir_pattern) - 1] = '\0';
-        g_dir_attr_mask = attr;
-
-        strncpy(info->name, find_data.cFileName, 13);
-        info->name[13] = '\0';
-        info->attr = (os_byte)find_data.dwFileAttributes;
-        info->size = (os_int32)find_data.nFileSizeLow;
-
-        /* Format GEMDOS packe pour la date/heure (simplifie) */
-        {
-            SYSTEMTIME st;
-            FileTimeToSystemTime(&find_data.ftLastWriteTime, &st);
-            info->date = (os_word)(((st.wYear - 1980) << 9) |
-                                   (st.wMonth << 5) |
-                                   st.wDay);
-            info->time = (os_word)((st.wHour << 11) |
-                                   (st.wMinute << 5) |
-                                   (st.wSecond / 2));
+        /* Sauter les points et appliquer le masque d'attributs */
+        while (dir_name_is_dot(find_data.cFileName) ||
+               (g_dir_attr_mask != 0 &&
+                (int)(find_data.dwFileAttributes &
+                      (unsigned long)g_dir_attr_mask) != g_dir_attr_mask)) {
+            if (!FindNextFileA(g_dir_handle, &find_data)) {
+                FindClose(g_dir_handle);
+                g_dir_handle = INVALID_HANDLE_VALUE;
+                g_last_error = OS_ERR_NO_MORE_FILES;
+                return OS_ERR_NO_MORE_FILES;
+            }
         }
-
-        FindClose(hFind);
-
+        dir_fill_from_find(&find_data, info);
         g_last_error = OS_ERR_NONE;
         return 0;
     }
@@ -1044,33 +1073,25 @@ int os_dir_next(os_file_info *info)
 #ifdef _WIN32
     {
         WIN32_FIND_DATA find_data;
-        HANDLE hFind;
 
-        hFind = FindFirstFile(g_dir_pattern, &find_data);
-        if (hFind == INVALID_HANDLE_VALUE) {
-            /* Pas de nouveau fichier */
+        if (g_dir_handle == INVALID_HANDLE_VALUE) {
             g_last_error = OS_ERR_NO_MORE_FILES;
             return OS_ERR_NO_MORE_FILES;
         }
-
-        /* Approche simplifiee : retourne toujours le meme fichier. */
-        strncpy(info->name, find_data.cFileName, 13);
-        info->name[13] = '\0';
-        info->attr = (os_byte)find_data.dwFileAttributes;
-        info->size = (os_int32)find_data.nFileSizeLow;
-        {
-            SYSTEMTIME st;
-            FileTimeToSystemTime(&find_data.ftLastWriteTime, &st);
-            info->date = (os_word)(((st.wYear - 1980) << 9) |
-                                   (st.wMonth << 5) |
-                                   st.wDay);
-            info->time = (os_word)((st.wHour << 11) |
-                                   (st.wMinute << 5) |
-                                   (st.wSecond / 2));
+        while (FindNextFileA(g_dir_handle, &find_data)) {
+            if (!dir_name_is_dot(find_data.cFileName) &&
+                (g_dir_attr_mask == 0 ||
+                 (int)(find_data.dwFileAttributes &
+                       (unsigned long)g_dir_attr_mask) == g_dir_attr_mask)) {
+                dir_fill_from_find(&find_data, info);
+                g_last_error = OS_ERR_NONE;
+                return 0;
+            }
         }
-        FindClose(hFind);
-        g_last_error = OS_ERR_NONE;
-        return 0;
+        FindClose(g_dir_handle);
+        g_dir_handle = INVALID_HANDLE_VALUE;
+        g_last_error = OS_ERR_NO_MORE_FILES;
+        return OS_ERR_NO_MORE_FILES;
     }
 #else
     {

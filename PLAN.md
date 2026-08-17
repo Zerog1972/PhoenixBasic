@@ -31,7 +31,8 @@ PhoenixBasic est un interpréteur **GFA Basic 3.5** (langage BASIC historique de
 ### Contrôle de flux
 IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, WHILE/WEND, REPEAT/UNTIL, DO/LOOP [WHILE|UNTIL], EXIT IF, SELECT/CASE/ENDSELECT, GOTO, GOSUB/RETURN, ON GOTO/GOSUB, STOP, END, QUIT
 
-> `FOR … DOWNTO` : non implémentée (erreur de parse). QUIT sans arg : parsé, sans effet.
+> `FOR … DOWNTO` : implémentée (flag de sens dans l'AST, pas -1 par défaut).
+> `QUIT [n]` : implémentée (code de sortie optionnel, `OP_QUIT`).
 
 ### Procédures/fonctions
 PROCEDURE/FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`)
@@ -42,7 +43,7 @@ PROCEDURE/FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récurs
 ### PRINT/INPUT
 PRINT, PRINT # (fichier), PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, INKEY$, CLS, LOCATE
 
-> `LINE INPUT`, `HTAB`, `VTAB` : non implémentés (erreur de parse).
+> `LINE INPUT` (console et `#canal`), `HTAB`, `VTAB` : implémentés.
 
 ### Fonctions mathématiques (35)
 SIN, COS, TAN, ATN, ASIN, ACOS, SINQ, COSQ, SINH, COSH, TANH, EXP, LOG, LOG10, SQR, ABS, SGN, INT, FRAC, FIX, ROUND, CEIL, TRUNC, MIN, MAX, EVEN, ODD, PRED, SUCC, FACT, COMBIN, VARIAT, RND, DEG, RAD, CFLOAT, CINT
@@ -56,15 +57,17 @@ BTST, BSET, BCLR, BCHG, SHL, SHR, ROL, ROR
 ### Tableaux 1D
 DIM, OPTION BASE 0/1 (base des indices des tableaux DIM ultérieurs)
 
-> `ERASE`, `ARRAYFILL`, `DIM?` : non implémentés (no-op ou erreur de parse).
+> `ERASE`, `ARRAYFILL`, `DIM?` : implémentés (2026-08-16, cf. commits types/arrays).
 
 ### Mémoire
 PEEK, POKE, DPEEK, DPOKE, LPEEK, LPOKE (via vmem), MALLOC (partiel), DATA, READ, RESTORE
 
-> `MFREE`, `BLOAD`, `BGET`, `BPUT` : non implémentés (erreur de parse). `BSAVE` : stub.
+> `MFREE` (vmem_free), `BLOAD`, `BGET`, `BPUT`, `BSAVE` : implémentés sur vmem.
+> `BLOAD "f", addr` (addr 0 = $8000) et `BSAVE "f", debut, fin` copient des
+> octets entre vmem et fichiers (tampon 64 Ko max).
 
 ### Fichiers
-OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#, INPUT#, BLOAD (stub), BSAVE (stub), BGET (stub), BPUT (stub)
+OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#, INPUT#, BLOAD, BSAVE, BGET, BPUT
 
 ### Graphismes SDL2
 COLOR (palette 16 couleurs), LINE, BOX, PBOX, CIRCLE, PCIRCLE
@@ -72,7 +75,9 @@ COLOR (palette 16 couleurs), LINE, BOX, PBOX, CIRCLE, PCIRCLE
 ### Événements
 EVERY, AFTER, ON ERROR, ERROR, ERR
 
-> `ON BREAK` : parsé, sans effet (no-op au codegen).
+> `ON BREAK` : parsé, sans effet (no-op au codegen). Limitation acceptée :
+> pas de touche Break en environnement headless (Ctrl+C = SIGINT/signal
+> console, non lisible comme touche).
 
 ### Son
 BEEP, SOUND ch, freq, dur, vol, env
@@ -356,7 +361,7 @@ Nécessite modification du mécanisme d'appel de procédure (AST, codegen, runti
 
 ### C9 — Itération de répertoire (FSFIRST / FSNEXT)
 
-Parsés comme builtins, runtime retourne 0. À implémenter via `os_layer` en s'appuyant sur les fonctions `opendir`/`readdir`.
+**FAIT.** `FSFIRST "masque"` / `FSNEXT` (statements) + `FNAME`, `FATTR`, `FPOS`, `SIZE` (fonctions), `EOF` sans argument = fin d'énumération. Implémenté dans `os_layer` (`os_dir_first`/`os_dir_next` : `FindFirstFileA`/`FindNextFileA` sur Windows, GEMDOS FsFirst/Fsnext sinon) avec handle persistant. Attributs convertis au format GFA (bit 0 = archive, bit 1 = lecture seule). Test : `tests/test_fsfirst.bas`.
 
 **Effort :** Petit
 

@@ -247,6 +247,12 @@ typedef enum {
     TOK_W_COLON,
     TOK_L_COLON,
 
+    /* Iteration de repertoire (complement FSFIRST/FSNEXT) */
+    TOK_FNAME,       /* FNAME() : nom du fichier courant    */
+    TOK_FATTR,       /* FATTR() : attributs du fichier courant */
+    TOK_FPOS,        /* FPOS() : position dans l'iteration   */
+    TOK_SIZE_TOK,    /* SIZE() : taille du fichier courant   */
+
     TOK_COUNT
 } gfa_token_type;
 

@@ -39,6 +39,11 @@ static int execute_instruction(gfa_runtime *rt);
 static int runtime_error(gfa_runtime *rt, int code, const char *msg);
 static char *format_using(const char *fmt, double value);
 
+/* Etat de l'iteration de repertoire (FSFIRST/FSNEXT/FNAME/...) */
+static os_file_info g_fs_info;
+static int          g_fs_state = 0;  /* 0=aucune 1=en cours 2=terminée  */
+static os_int32     g_fs_pos   = 0;
+
 /* ------------------------------------------------------------------ */
 /* Initialisation / Arret du runtime                                  */
 /* ------------------------------------------------------------------ */
@@ -2756,14 +2761,17 @@ static int execute_instruction(gfa_runtime *rt)
 
                     /* --- Fonctions fichiers (canal en argument) --- */
                     case TOK_EOF_TOK:
-                        if (rt->sp >= 1) {
+                        /* EOF(n) : fin de fichier canal n.
+                           EOF sans arg : fin d'iteration FSFIRST. */
+                        if (argc_call >= 1) {
                             arg1 = gfa_value_pop(rt);
                             result_l = (os_int32)gfa_eof(
                                 (int)gfa_value_to_long(arg1));
                             gfa_value_push_long(rt, result_l);
                             if (arg1) os_mem_free(arg1);
                         } else {
-                            gfa_value_push_long(rt, 0);
+                            gfa_value_push_long(rt,
+                                g_fs_state != 1 ? 1 : 0);
                         }
                         break;
                     case TOK_LOF:
@@ -2873,6 +2881,69 @@ static int execute_instruction(gfa_runtime *rt)
                     case TOK_FGETDTA:
                     case TOK_FSETDTA:
                         gfa_value_push_long(rt, 0);
+                        break;
+                    case TOK_FSFIRST:
+                        /* FSFIRST "masque" : demarre l'iteration. */
+                        if (rt->sp >= 1) {
+                            gfa_value *p;
+                            int rc;
+                            p = gfa_value_pop(rt);
+                            if (p != NULL && p->type == GFA_VAL_STRING &&
+                                p->data.s != NULL) {
+                                rc = os_dir_first(p->data.s, 0,
+                                                  &g_fs_info);
+                                if (rc == 0) {
+                                    g_fs_state = 1;
+                                    g_fs_pos = 1;
+                                } else {
+                                    g_fs_state = 2;
+                                    g_fs_pos = 0;
+                                }
+                            } else {
+                                rc = OS_ERR_FILE_NOT_FOUND;
+                                g_fs_state = 2;
+                                g_fs_pos = 0;
+                            }
+                            gfa_value_push_long(rt, (os_int32)rc);
+                            if (p != NULL) os_mem_free(p);
+                        } else {
+                            gfa_value_push_long(rt, 0);
+                        }
+                        break;
+                    case TOK_FSNEXT:
+                        if (g_fs_state == 1) {
+                            int rc;
+                            rc = os_dir_next(&g_fs_info);
+                            if (rc == 0) {
+                                g_fs_pos++;
+                                gfa_value_push_long(rt, 0);
+                            } else {
+                                g_fs_state = 2;
+                                gfa_value_push_long(rt, (os_int32)rc);
+                            }
+                        } else {
+                            gfa_value_push_long(rt,
+                                (os_int32)OS_ERR_NO_MORE_FILES);
+                        }
+                        break;
+                    case TOK_FNAME:
+                        /* FNAME() : nom du fichier courant (8.3). */
+                        gfa_value_push_string(rt, gfa_str_new(
+                            g_fs_state == 1 ? g_fs_info.name : ""), 1);
+                        break;
+                    case TOK_FATTR:
+                        gfa_value_push_long(rt,
+                            g_fs_state == 1 ?
+                            (os_int32)g_fs_info.attr : 0);
+                        break;
+                    case TOK_FPOS:
+                        gfa_value_push_long(rt,
+                            g_fs_state == 1 ? g_fs_pos : 0);
+                        break;
+                    case TOK_SIZE_TOK:
+                        /* SIZE() : taille du fichier courant. */
+                        gfa_value_push_long(rt,
+                            g_fs_state == 1 ? g_fs_info.size : 0);
                         break;
                     case TOK_SEEK:
                         if (rt->sp >= 2) {

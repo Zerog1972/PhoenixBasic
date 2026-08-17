@@ -283,6 +283,25 @@ static ast_node *parse_statement(gfa_parser *parser)
                 ast_add_arg(node, parse_expression(parser));
                 return node;
             }
+        case TOK_FSNEXT:
+            /* FSNEXT : statement sans argument */
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)TOK_FSNEXT;
+                return node;
+            }
+        case TOK_FSFIRST:
+            /* FSFIRST "masque" : statement (resultat depile au codegen) */
+            {
+                ast_node *node;
+                gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_CALL);
+                node->value.int_val = (long)TOK_FSFIRST;
+                ast_add_arg(node, parse_expression(parser));
+                return node;
+            }
         case TOK_FGETDTA:
             return parse_builtin_call(parser, tok);
         case TOK_FSETDTA:
@@ -842,17 +861,22 @@ static ast_node *parse_statement(gfa_parser *parser)
             {
                 ast_node *node;
                 const char *label_name;
+                gfa_token_type ltok;
                 node = ast_create(AST_GOTO);
                 gfa_lexer_next(parser->lexer);
                 label_name = NULL;
-                /* Accepter tout token comme nom de label */
-                if (parser->lexer->current.value.ident_name != NULL) {
+                /* value est une union : tester le type AVANT de lire
+                   ident_name (sur un entier = entier reinterprete) */
+                ltok = parser->lexer->current.type;
+                if (ltok == TOK_INTEGER) {
+                    char buf[32];
+                    sprintf(buf, "%ld", parser->lexer->current.value.int_value);
+                    node->value.ident = os_strdup(buf);
+                    node->has_ident = 1;
+                } else if (ltok == TOK_IDENTIFIER || ltok == TOK_LABEL) {
                     label_name = parser->lexer->current.value.ident_name;
                 } else {
-                    /* Pour les mots-cles utilises comme labels,
-                       utiliser le nom du token */
-                    label_name = gfa_keyword_get_name(
-                        parser->lexer->current.type);
+                    label_name = gfa_keyword_get_name(ltok);
                 }
                 if (label_name != NULL && label_name[0] != '\0') {
                     node->value.ident = os_strdup(label_name);
@@ -865,14 +889,20 @@ static ast_node *parse_statement(gfa_parser *parser)
             {
                 ast_node *node;
                 const char *label_name;
+                gfa_token_type ltok;
                 node = ast_create(AST_GOSUB);
                 gfa_lexer_next(parser->lexer);
                 label_name = NULL;
-                if (parser->lexer->current.value.ident_name != NULL) {
+                ltok = parser->lexer->current.type;
+                if (ltok == TOK_INTEGER) {
+                    char buf[32];
+                    sprintf(buf, "%ld", parser->lexer->current.value.int_value);
+                    node->value.ident = os_strdup(buf);
+                    node->has_ident = 1;
+                } else if (ltok == TOK_IDENTIFIER || ltok == TOK_LABEL) {
                     label_name = parser->lexer->current.value.ident_name;
                 } else {
-                    label_name = gfa_keyword_get_name(
-                        parser->lexer->current.type);
+                    label_name = gfa_keyword_get_name(ltok);
                 }
                 if (label_name != NULL && label_name[0] != '\0') {
                     node->value.ident = os_strdup(label_name);
@@ -1389,6 +1419,32 @@ static ast_node *parse_statement(gfa_parser *parser)
                 return node;
             }
 
+        /* Etiquette numerique (numero de ligne) : "900" ou "900: ..." */
+        case TOK_INTEGER:
+            {
+                gfa_token_type nxt;
+                nxt = gfa_lexer_peek_token(parser->lexer);
+                if (nxt == TOK_EOL || nxt == TOK_EOF || nxt == TOK_COLON) {
+                    ast_node *node;
+                    char buf[32];
+                    sprintf(buf, "%ld", parser->lexer->current.value.int_value);
+                    node = ast_create_ident(AST_LABEL, buf);
+                    if (parser->label_count < 256) {
+                        parser->labels[parser->label_count].name =
+                            os_strdup(buf);
+                        parser->labels[parser->label_count].ast_node_index = 0;
+                        parser->label_count++;
+                    }
+                    gfa_lexer_next(parser->lexer);  /* consommer le numero */
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                        gfa_lexer_next(parser->lexer);  /* consommer ':' */
+                    }
+                    return node;
+                }
+                /* Sinon : expression debutant par un entier */
+                return parse_expression(parser);
+            }
+
         /* Identifiant = expression (assignation implicite) */
         case TOK_IDENTIFIER:
             {
@@ -1479,14 +1535,20 @@ static ast_node *parse_statement(gfa_parser *parser)
             {
                 ast_node *node;
                 const char *label_name;
+                gfa_token_type ltok;
                 node = ast_create(AST_GOSUB);
                 gfa_lexer_next(parser->lexer);
                 label_name = NULL;
-                if (parser->lexer->current.value.ident_name != NULL) {
+                ltok = parser->lexer->current.type;
+                if (ltok == TOK_INTEGER) {
+                    char buf[32];
+                    sprintf(buf, "%ld", parser->lexer->current.value.int_value);
+                    node->value.ident = os_strdup(buf);
+                    node->has_ident = 1;
+                } else if (ltok == TOK_IDENTIFIER || ltok == TOK_LABEL) {
                     label_name = parser->lexer->current.value.ident_name;
                 } else {
-                    label_name = gfa_keyword_get_name(
-                        parser->lexer->current.type);
+                    label_name = gfa_keyword_get_name(ltok);
                 }
                 if (label_name != NULL && label_name[0] != '\0') {
                     node->value.ident = os_strdup(label_name);
@@ -1829,10 +1891,30 @@ static ast_node *parse_if(gfa_parser *parser)
     if (gfa_lexer_current_token(parser->lexer) == TOK_THEN) {
         gfa_lexer_next(parser->lexer);
 
-        /* THEN sur la meme ligne : une ou deux instructions */
+        /* THEN sur la meme ligne : une ou plusieurs instructions
+           (tout ce qui suit le ':' fait partie de la clause THEN) */
         if (gfa_lexer_current_token(parser->lexer) != TOK_EOL) {
             ast_node *body;
             body = parse_statement(parser);
+            if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                ast_node *list;
+                list = ast_create(AST_STATEMENT_LIST);
+                ast_add_child(list, body);
+                gfa_lexer_next(parser->lexer);  /* consommer ':' */
+                while (gfa_lexer_current_token(parser->lexer) != TOK_EOL &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_EOF &&
+                       gfa_lexer_current_token(parser->lexer) != TOK_ELSE) {
+                    ast_node *s2;
+                    s2 = parse_statement(parser);
+                    if (s2 != NULL) ast_add_child(list, s2);
+                    if (gfa_lexer_current_token(parser->lexer) == TOK_COLON) {
+                        gfa_lexer_next(parser->lexer);
+                    } else {
+                        break;
+                    }
+                }
+                body = list;
+            }
             ast_set_body(node, body);
             /* ELSE sur la meme ligne ? */
             if (gfa_lexer_current_token(parser->lexer) == TOK_ELSE) {
@@ -3339,6 +3421,7 @@ static ast_node *parse_primary(gfa_parser *parser)
         case TOK_ARRPTR: case TOK_VARPTR:
         case TOK_EXIST: case TOK_DFREE: case TOK_DIR_TOK: case TOK_DIR_TOK2:
         case TOK_FSFIRST: case TOK_FSNEXT:
+        case TOK_FNAME: case TOK_FATTR: case TOK_FPOS: case TOK_SIZE_TOK:
         case TOK_FRE: case TOK_HIMEM:
         case TOK_BYTE_TOK: case TOK_CARD: case TOK_WORD_TOK: case TOK_LONG_TOK:
         case TOK_POINT: case TOK_PTST:

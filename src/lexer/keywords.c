@@ -171,6 +171,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"FACT",               TOK_FACT},
     {"FALSE",              TOK_FALSE},
     {"FATAL",              TOK_FATAL},
+    {"FATTR",              TOK_FATTR},
     {"FGETDTA",            TOK_FGETDTA},
     {"FIELD",              TOK_FIELD},
     {"FILES",              TOK_FILES},
@@ -179,6 +180,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"FIX",                TOK_FIX},
     {"FLOAT",              TOK_DOUBLE_TOK},
     {"FN",                 TOK_FN},
+    {"FNAME",              TOK_FNAME},
     {"FOR",                TOK_FOR},
     {"FORM_ALERT",         TOK_FORM_ALERT},
     {"FORM_BUTTON",        TOK_FORM_BUTTON},
@@ -188,6 +190,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"FORM_ERROR",         TOK_FORM_ERROR},
     {"FORM_INPUT",         TOK_FORM_INPUT},
     {"FORM_KEYBD",         TOK_FORM_KEYBD},
+    {"FPOS",               TOK_FPOS},
     {"FRAC",               TOK_FRAC},
     {"FRE",                TOK_FRE},
     {"FSEL_INPUT",         TOK_FSEL_INPUT},
@@ -426,6 +429,7 @@ const gfa_keyword_entry gfa_keywords[] = {
     {"SINGLE",             TOK_SINGLE},
     {"SINH",               TOK_SINH},
     {"SINQ",               TOK_SINQ},
+    {"SIZE",               TOK_SIZE_TOK},
     {"SLPOKE",             TOK_SLPOKE},
     {"SOUND",              TOK_SOUND},
     {"SPACE",              TOK_SPACE_TOK},
@@ -568,6 +572,16 @@ gfa_token_type gfa_keyword_lookup(const char *name)
             high = mid - 1;
         } else {
             low = mid + 1;
+        }
+    }
+
+    /* La table comporte quelques entrees hors ordre (historique) :
+       la dichotomie peut rater ces mots-cles. Repli lineaire. */
+    {
+        int i;
+        for (i = 0; i < gfa_keyword_count; i++) {
+            if (cmp_ignore_case(name, gfa_keywords[i].name) == 0)
+                return gfa_keywords[i].token;
         }
     }
 

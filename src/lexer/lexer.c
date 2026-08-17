@@ -102,6 +102,7 @@ gfa_lexer *gfa_lexer_init(const char *source)
     lexer->column    = 1;
     lexer->line_start = 0;
     lexer->has_peek  = 0;
+    lexer->at_stmt_start = 1;
     lexer->error     = LEX_OK;
     lexer->expand_abbrev = 1;
 
@@ -188,6 +189,9 @@ gfa_token_type gfa_lexer_next(gfa_lexer *lexer)
         memset(&lexer->peek, 0, sizeof(gfa_token));
         lexer->peek.type = TOK_EOF;
         lexer->has_peek = 0;
+        lexer->at_stmt_start =
+            (lexer->current.type == TOK_EOL ||
+             lexer->current.type == TOK_COLON);
         return lexer->current.type;
     }
 
@@ -202,11 +206,13 @@ gfa_token_type gfa_lexer_next(gfa_lexer *lexer)
         lexer->current.type = TOK_EOF;
         lexer->current.line = lexer->line;
         lexer->current.column = lexer->column;
+        lexer->at_stmt_start = 0;
         return TOK_EOF;
     }
 
     type = scan_token(lexer);
     lexer->current.type = type;
+    lexer->at_stmt_start = (type == TOK_EOL || type == TOK_COLON);
 
     return type;
 }
@@ -768,6 +774,28 @@ static gfa_token_type scan_identifier(gfa_lexer *lexer)
 
     buf[i] = '\0';
 
+    /* "END IF" (avec espace) -> ENDIF. Ne sauter que des espaces
+       (pas de retour a la ligne : un IF sur la ligne suivante
+       ne fait pas partie du END). */
+    if (os_str_iequal(buf, "END")) {
+        int p, found;
+        p = lexer->pos;
+        while (p < lexer->src_len &&
+               (lexer->source[p] == ' ' || lexer->source[p] == '\t')) {
+            p++;
+        }
+        found = (p + 1 < lexer->src_len) &&
+                toupper((unsigned char)lexer->source[p]) == 'I' &&
+                toupper((unsigned char)lexer->source[p + 1]) == 'F' &&
+                (p + 2 >= lexer->src_len ||
+                 !isalnum((unsigned char)lexer->source[p + 2]));
+        if (found) {
+            lexer->pos = p + 2;
+            strcpy(buf, "ENDIF");
+            i = 5;
+        }
+    }
+
     lexer->current.line = start_line;
     lexer->current.column = start_col;
 
@@ -793,7 +821,7 @@ static gfa_token_type scan_identifier(gfa_lexer *lexer)
             }
         }
 
-        if (saved_c == ':') {
+        if (lexer->at_stmt_start && saved_c == ':') {
             /* C'est une etiquette, consommer le ':' */
             lexer->pos     = saved_pos + 1;
             lexer->column  = saved_col + 1;

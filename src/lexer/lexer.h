@@ -30,6 +30,9 @@ typedef struct {
     gfa_token   current;     /* Token courant                     */
     gfa_token   peek;        /* Token suivant (lookahead 1)       */
     int         has_peek;    /* 1 si peek est valide              */
+    int         at_stmt_start; /* 1 si le prochain token est au
+                                  debut d'instruction (apres EOL,
+                                  ':' ou debut de programme)        */
 
     lexer_error error;       /* Derniere erreur                   */
     int         error_line;
