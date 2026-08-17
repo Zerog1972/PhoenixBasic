@@ -4982,6 +4982,41 @@ static int execute_instruction(gfa_runtime *rt)
             }
             break;
 
+        /* MAT DET/RANG/NORM en position expression : push scalaire */
+        case OP_MAT_DET_EXPR:
+        case OP_MAT_RANG_EXPR:
+        case OP_MAT_NORM_EXPR:
+            {
+                int sub_ex;
+                const char *mname = "";
+                double mv = 0.0;
+                gfa_variable *pm;
+
+                if (inst->operand.str_index >= 0 &&
+                    inst->operand.str_index < rt->program->str_count)
+                    mname = rt->program->strings[inst->operand.str_index];
+                if (inst->opcode == OP_MAT_RANG_EXPR)
+                    sub_ex = MAT_OP_RANG;
+                else if (inst->opcode == OP_MAT_NORM_EXPR)
+                    sub_ex = MAT_OP_NORM;
+                else
+                    sub_ex = MAT_OP_DET;
+                /* Promouvoir un tableau 2D en matrice si besoin */
+                if (mname[0] != '\0') {
+                    pm = gfa_var_lookup(rt->globals, mname);
+                    if (pm != NULL && pm->type == GFA_VAR_ARRAY &&
+                        pm->value.arr.num_dims == 2 &&
+                        pm->value.arr.data != NULL)
+                        pm->value.arr.is_matrix = 1;
+                }
+                if (gfa_matrix_scalar_value(rt, sub_ex, mname, &mv) != 0) {
+                    if (!runtime_error(rt, 17, "MAT error"))
+                        return -1;
+                }
+                gfa_value_push_float(rt, mv);
+            }
+            break;
+
         case OP_ELLIPSE_GFX:
             /* Stack: [x][y][rx][ry][fill] */
             if (rt->sp >= 5) {

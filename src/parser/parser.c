@@ -3286,6 +3286,45 @@ static ast_node *parse_primary(gfa_parser *parser)
                 return node;
             }
 
+        case TOK_MAT:
+            {
+                /* MAT DET(a) / MAT RANG(a) / MAT NORM(a) en position
+                   expression : x = MAT DET(a) */
+                ast_node *node;
+                gfa_token_type sub_tok;
+                const char *sname;
+                long sub = -1;
+
+                gfa_lexer_next(parser->lexer);  /* consommer MAT */
+                sub_tok = gfa_lexer_current_token(parser->lexer);
+                if (sub_tok != TOK_IDENTIFIER) {
+                    PARSER_ERROR(parser, "Unexpected token in expression");
+                    return NULL;
+                }
+                sname = parser->lexer->current.value.ident_name;
+                if (parse_ident_is(sname, "DET") ||
+                    parse_ident_is(sname, "QDET"))
+                    sub = MAT_OP_DET;
+                else if (parse_ident_is(sname, "RANG"))
+                    sub = MAT_OP_RANG;
+                else if (parse_ident_is(sname, "NORM"))
+                    sub = MAT_OP_NORM;
+                else {
+                    PARSER_ERROR(parser, "Unexpected token in expression");
+                    return NULL;
+                }
+                gfa_lexer_next(parser->lexer);  /* consommer DET/RANG/… */
+                if (gfa_lexer_current_token(parser->lexer) == TOK_LPAREN)
+                    gfa_lexer_next(parser->lexer);
+                node = ast_create(AST_MAT);
+                node->value.int_val = sub;
+                node->is_expr = 1;
+                node->body = parse_matrix_name(parser);
+                if (gfa_lexer_current_token(parser->lexer) == TOK_RPAREN)
+                    gfa_lexer_next(parser->lexer);
+                return node;
+            }
+
         case TOK_W_COLON:
         case TOK_L_COLON:
             {

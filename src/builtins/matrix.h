@@ -78,6 +78,15 @@ int gfa_matrix_print(gfa_runtime *rt, gfa_variable *m);
 int gfa_matrix_scalar(gfa_runtime *rt, int sub_op, const char *src);
 
 /*
+ * gfa_matrix_scalar_value - Comme gfa_matrix_scalar mais renvoie la
+ * valeur dans *out au lieu de l'afficher (pour l'usage en expression,
+ * ex. x = MAT DET(a)).
+ * 0 = succes, -1 = echec.
+ */
+int gfa_matrix_scalar_value(gfa_runtime *rt, int sub_op, const char *src,
+                            double *out);
+
+/*
  * gfa_matrix_read_data — Remplit une matrice depuis le flux DATA.
  * Retourne 0 si succes.
  */

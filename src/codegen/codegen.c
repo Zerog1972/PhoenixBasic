@@ -1050,6 +1050,22 @@ static void cg_statement(codegen_ctx *ctx, ast_node *node)
             if (node->cond && node->cond->has_ident &&
                 node->cond->value.ident)
                 src2 = node->cond->value.ident;
+
+            /* Forme expression : x = MAT DET(a) / RANG / NORM —
+               pousse le scalaire sur la pile. */
+            if (node->is_expr) {
+                int si_expr;
+                gfa_opcode mop_expr;
+                if (sub == MAT_OP_RANG)      mop_expr = OP_MAT_RANG_EXPR;
+                else if (sub == MAT_OP_NORM) mop_expr = OP_MAT_NORM_EXPR;
+                else                          mop_expr = OP_MAT_DET_EXPR;
+                si_expr = gfa_bytecode_add_string(ctx->bc, src1);
+                instr_idx = cg_emit(ctx, mop_expr);
+                if (instr_idx >= 0)
+                    ctx->bc->code[instr_idx].operand.str_index = si_expr;
+                break;
+            }
+
             if (target != NULL)
                 ti = gfa_bytecode_add_string(ctx->bc, target);
             if (src1 != NULL)
@@ -1193,6 +1209,32 @@ static void cg_expression(codegen_ctx *ctx, ast_node *node)
             } else {
                 cg_emit_float_const(ctx, OP_PUSH_CONST, 0.0);
             }
+        }
+        break;
+
+    case AST_MAT:
+        /* x = MAT DET(a) / RANG / NORM : pousse le scalaire */
+        {
+            long sub = node->value.int_val;
+            const char *mname = NULL;
+            int si_m;
+            gfa_opcode mop_m;
+            int idx_m;
+
+            if (node->body && node->body->has_ident &&
+                node->body->value.ident)
+                mname = node->body->value.ident;
+            if (mname == NULL) {
+                cg_emit_float_const(ctx, OP_PUSH_CONST, 0.0);
+                break;
+            }
+            if (sub == MAT_OP_RANG)      mop_m = OP_MAT_RANG_EXPR;
+            else if (sub == MAT_OP_NORM) mop_m = OP_MAT_NORM_EXPR;
+            else                          mop_m = OP_MAT_DET_EXPR;
+            si_m = gfa_bytecode_add_string(ctx->bc, mname);
+            idx_m = cg_emit(ctx, mop_m);
+            if (idx_m >= 0)
+                ctx->bc->code[idx_m].operand.str_index = si_m;
         }
         break;
 

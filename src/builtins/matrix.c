@@ -400,6 +400,31 @@ int gfa_matrix_scalar(gfa_runtime *rt, int sub_op, const char *src)
     return 0;
 }
 
+int gfa_matrix_scalar_value(gfa_runtime *rt, int sub_op, const char *src,
+                            double *out)
+{
+    gfa_symbol_table *tab;
+    gfa_variable *a;
+    double v;
+
+    if (out == NULL) return -1;
+    tab = rt ? rt->globals : NULL;
+    if (tab == NULL) return -1;
+    a = gfa_matrix_get(tab, src);
+    if (a == NULL) return -1;
+    if (sub_op == MAT_OP_DET) {
+        v = mat_det_val(a);
+    } else if (sub_op == MAT_OP_RANG) {
+        v = (double)mat_rang_val(a);
+    } else if (sub_op == MAT_OP_NORM) {
+        v = mat_norm_val(a);
+    } else {
+        return -1;
+    }
+    *out = v;
+    return 0;
+}
+
 int gfa_matrix_read_data(gfa_runtime *rt, gfa_variable *m)
 {
     int r, c;

@@ -297,19 +297,18 @@ Tous parsés comme builtins, runtime retourne 0. L'interface VDI est un tableau 
 
 ### C4 — Opérations matricielles MAT (19 fonctions)
 
-- **I/O** : `MAT READ`, `MAT INPUT`, `MAT PRINT`
-- **Init** : `MAT SET`, `MAT CLR`, `MAT ONE`, `MAT CPY`, `MAT XCPY`
-- **Arithmétique** : `MAT ADD`, `MAT SUB`, `MAT MUL` (scalaire et matriciel)
-- **Algèbre** : `MAT TRANS`, `MAT INV`, `MAT DET`, `MAT QDET`, `MAT RANG`, `MAT NORM`, `MAT BASE`
-- **Unaires** : `MAT ABS`, `MAT NEG`
+**FAIT (partiel).** Implémenté dans `src/builtins/matrix.c` + opcodes `OP_MAT_*` (180-197) :
+- `MAT READ/INPUT/PRINT` (I/O)
+- `MAT CLR / ONE / SET` (init : `MAT a = n` remplit la matrice de n)
+- `MAT c = a [+|-|* b]` (arithmétique, syntaxe `MAT c = …`)
+- `MAT c = TRN(b) / TRANS(b) / INV(b)`, `MAT DET(a) / QDET(a) / RANG(a) / NORM(a)`
+- `MAT BASE = n`
 
-Nécessite :
-1. Nouveau module `src/matrix/` avec fonctions d'algèbre linéaire (C89)
-2. Parser pour le mot-clé `MAT` en préfixe d'instruction
-3. Nouvelles opcodes `OP_MAT_*`
-4. Gestion de tableaux 2D (actuellement seulement 1D)
+**Contrainte** : la matrice doit être `DIM`'e avant (ex. `DIM a(2,2)` puis `MAT a = 2`) — conforme GFA. Les opcodes existaient déjà au runtime ; note "pas de runtime" obsolète.
 
-**Effort :** Gros
+**Reste** : `MAT ABS`, `MAT NEG` (unaires), `MAT XCPY`.
+
+**Effort :** Gros (fait)
 
 ### C5 — Fichiers Random (FIELD / GET# / PUT#)
 

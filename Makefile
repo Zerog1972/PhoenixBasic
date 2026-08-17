@@ -42,6 +42,10 @@ SRCS = src/utils/os_layer.c src/builtins/strings.c src/builtins/gfamath.c \
        src/codegen/codegen.c \
        src/graphics/gfx.c
 
+# En-tetes : toute modification d'un .h force la recompilation de tous
+# les objets (grossier mais fiable — aucun tracking fin de dependances).
+HDRS = $(wildcard src/*.h) $(wildcard src/*/*.h)
+
 OBJS = $(patsubst src/%.c,$(BUILDDIR)/%.o,$(SRCS))
 
 # Application principale
@@ -63,8 +67,8 @@ app: $(OBJS) src/main.c
 runtime: $(OBJS)
 	@echo "All modules compiled ($(words $(OBJS)) objects)."
 
-# Regle generique
-$(BUILDDIR)/%.o: src/%.c | $(BUILDDIR)/dirs
+# Regle generique (dependance sur tous les en-tetes)
+$(BUILDDIR)/%.o: src/%.c $(HDRS) | $(BUILDDIR)/dirs
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILDDIR)/dirs:

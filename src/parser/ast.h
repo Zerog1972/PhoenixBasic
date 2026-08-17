@@ -174,6 +174,7 @@ typedef struct ast_node {
      */
     int           has_str;       /* 1 si value.str_val est allouee   */
     int           has_ident;     /* 1 si value.ident est allouee     */
+    int           is_expr;       /* 1 si AST_MAT en position expr    */
 
     /* Valeurs possibles */
     union {

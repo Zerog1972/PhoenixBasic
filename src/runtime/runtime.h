@@ -313,6 +313,9 @@ typedef enum {
     OP_MAT_INPUT    = 197,  /* str_index = nom cible (console)          */
     OP_ARRAYFILL    = 194,  /* pile [valeur] ; operand = tableau        */
     OP_DIM_QUESTION = 200,  /* operand = tableau ; push chaine dims     */
+    OP_MAT_DET_EXPR = 201,  /* str_index = matrice ; push det (expr)    */
+    OP_MAT_RANG_EXPR = 202, /* str_index = matrice ; push rang (expr)   */
+    OP_MAT_NORM_EXPR = 203, /* str_index = matrice ; push norm (expr)   */
     OP_LINE_INPUT_FILE = 198, /* pile [canal] ; operand = var$          */
     OP_WINDOW_GFX   = 199,  /* pile [x0][y0][x1][y1] : WINDOW (..),(..) */
 
