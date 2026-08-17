@@ -63,7 +63,9 @@ static void test_strings(void)
     /* Escaped quotes */
     lex = gfa_lexer_init("\"say \"\"hi\"\"\"");
     gfa_lexer_next(lex);
-    TEST(lex->current.type == TOK_STRING, "Escaped quotes string type");
+    TEST(lex->current.type == TOK_STRING &&
+         strcmp(lex->current.value.string_value, "say \"hi\"") == 0,
+         "Escaped quotes string value");
     gfa_lexer_free(lex);
 }
 

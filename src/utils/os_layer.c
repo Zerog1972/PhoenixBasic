@@ -1801,3 +1801,14 @@ void os_sys_quit(int exit_code)
     os_shutdown();
     exit(exit_code);
 }
+
+/*
+ * os_system — Execute une commande shell (equivalent SYSTEM/EXEC).
+ * Retourne le code de retour de la commande (0 = succes).
+ */
+os_int32 os_system(const char *cmd)
+{
+    if (cmd == NULL)
+        return OS_ERR_INTERNAL;
+    return (os_int32)system(cmd);
+}

@@ -448,6 +448,10 @@ typedef struct gfa_runtime {
     /* Retour de fonction */
     gfa_value       function_return;
 
+    /* CHAIN : hook appele pour executer le programme cible
+       (branche par main.c). NULL = CHAIN indisponible. */
+    int           (*chain_fn)(const char *path);
+
 } gfa_runtime;
 
 /* ------------------------------------------------------------------ */
@@ -459,6 +463,13 @@ typedef struct gfa_runtime {
  * Retourne un pointeur vers le contexte cree.
  */
 gfa_runtime *gfa_runtime_init(void);
+
+/*
+ * gfa_runtime_set_chain_fn - Branche le hook CHAIN.
+ * fn est appele avec le nom du programme cible ; son code retour
+ * est celui de l'executeur (0 = succes). NULL desactive CHAIN.
+ */
+void gfa_runtime_set_chain_fn(gfa_runtime *rt, int (*fn)(const char *path));
 
 /*
  * gfa_runtime_shutdown - Libere toutes les ressources du runtime.

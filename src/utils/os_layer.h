@@ -690,6 +690,12 @@ os_int32 os_sys_get_basepage(void);
  */
 void os_sys_quit(int exit_code);
 
+/*
+ * os_system — Execute une commande shell (equivalent SYSTEM/EXEC).
+ * Retourne le code de retour de la commande (0 = succes).
+ */
+os_int32 os_system(const char *cmd);
+
 #ifdef __cplusplus
 }
 #endif

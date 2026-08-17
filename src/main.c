@@ -95,6 +95,56 @@ static char *load_file(const char *filename)
 /* Execute un programme GFA Basic                                     */
 /* ------------------------------------------------------------------ */
 
+static int run_program(const char *source);
+
+/*
+ * chain_handler — Hook CHAIN : lit le programme cible et l'execute.
+ * Remplace le programme courant (l'executeur de CHAIN arrete la VM
+ * apres le retour de ce hook). Retour : code du programme cible.
+ */
+static int chain_handler(const char *path)
+{
+    os_file_handle h;
+    os_int32 size;
+    char *buf;
+    os_int32 nread;
+    os_int32 off;
+    int rc;
+
+    h = os_file_open(path, 'I', 0);
+    if (h == NULL)
+        return -1;
+
+    size = os_file_size(h);
+    if (size <= 0) {
+        os_file_close(h);
+        return -1;
+    }
+
+    buf = (char *)os_mem_alloc((size_t)size + 1);
+    if (buf == NULL) {
+        os_file_close(h);
+        return -1;
+    }
+
+    nread = 0;
+    off = 0;
+    while (off < size) {
+        os_int32 chunk = os_file_read(h, buf + off,
+                                      size - off);
+        if (chunk <= 0)
+            break;
+        nread += chunk;
+        off += chunk;
+    }
+    os_file_close(h);
+    buf[nread] = '\0';
+
+    rc = run_program(buf);
+    os_mem_free(buf);
+    return rc;
+}
+
 static int run_program(const char *source)
 {
     gfa_parser *parser;
@@ -109,6 +159,7 @@ static int run_program(const char *source)
         fprintf(stderr, "Error: cannot initialize runtime\n");
         return 1;
     }
+    gfa_runtime_set_chain_fn(rt, chain_handler);
 
     /*
      * Initialiser le mode graphique C89.

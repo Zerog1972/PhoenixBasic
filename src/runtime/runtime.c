@@ -124,6 +124,12 @@ gfa_runtime *gfa_runtime_init(void)
     return rt;
 }
 
+void gfa_runtime_set_chain_fn(gfa_runtime *rt, int (*fn)(const char *path))
+{
+    if (rt == NULL) return;
+    rt->chain_fn = fn;
+}
+
 void gfa_runtime_shutdown(gfa_runtime *rt)
 {
     if (rt == NULL) return;
@@ -2469,10 +2475,9 @@ static int execute_instruction(gfa_runtime *rt)
                         gfa_value_push_long(rt, 0);
                         break;
 
-                    /* DMACONTROL / DMASOUND / SYSTEM - emules, resultat 0 */
+                    /* DMACONTROL / DMASOUND - emules, resultat 0 */
                     case TOK_DMACONTROL:
                     case TOK_DMASOUND:
-                    case TOK_SYSTEM:
                         if (rt->sp >= 1) {
                             gfa_value *sv = gfa_value_pop(rt);
                             if (sv) {
@@ -2481,6 +2486,59 @@ static int execute_instruction(gfa_runtime *rt)
                             }
                         }
                         gfa_value_push_long(rt, 0);
+                        break;
+
+                    /* SYSTEM "cmd" / EXEC "cmd" : execute la
+                       commande shell et continue le programme. */
+                    case TOK_SYSTEM:
+                    case TOK_EXEC:
+                        {
+                            int rc_sys = 0;
+                            if (rt->sp >= 1) {
+                                gfa_value *sv = gfa_value_pop(rt);
+                                if (sv != NULL &&
+                                    sv->type == GFA_VAL_STRING &&
+                                    sv->data.s != NULL) {
+                                    rc_sys = (int)os_system(sv->data.s);
+                                }
+                                if (sv) {
+                                    if (sv->owns_string && sv->data.s) os_mem_free(sv->data.s);
+                                    os_mem_free(sv);
+                                }
+                            }
+                            gfa_value_push_long(rt, rc_sys);
+                        }
+                        break;
+
+                    /* CHAIN "prog" : execute un autre programme, qui
+                       remplace le courant. Le hook (branche par main)
+                       lit le fichier et relance l'interpreteur. */
+                    case TOK_CHAIN:
+                        {
+                            int rc_ch = 0;
+                            if (rt->sp >= 1) {
+                                gfa_value *sv = gfa_value_pop(rt);
+                                if (sv != NULL &&
+                                    sv->type == GFA_VAL_STRING &&
+                                    sv->data.s != NULL) {
+                                    if (rt->chain_fn != NULL) {
+                                        rc_ch = rt->chain_fn(sv->data.s);
+                                    } else {
+                                        rc_ch = -1;
+                                    }
+                                }
+                                if (sv) {
+                                    if (sv->owns_string && sv->data.s) os_mem_free(sv->data.s);
+                                    os_mem_free(sv);
+                                }
+                            }
+                            rt->running = 0;
+                            if (rc_ch != 0) {
+                                /* 19 = fichier introuvable (code GFA) */
+                                runtime_error(rt, 19, "CHAIN: fichier introuvable");
+                            }
+                            return rc_ch;
+                        }
                         break;
 
                     /* KEYTEST - 1 si une touche est disponible (sans consommer) */

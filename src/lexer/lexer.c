@@ -704,14 +704,19 @@ static gfa_token_type scan_string(gfa_lexer *lexer)
     ADVANCE(lexer);
 
     c = CURRENT_CHAR(lexer);
-    while (c != '\0' && c != '"' && i < LEXER_BUF_SIZE - 1) {
-        /* Guillemet echappe : "" -> " */
-        if (c == '"' && PEEK_CHAR(lexer, 1) == '"') {
-            buf[i++] = '"';
-            ADVANCE(lexer);
-            ADVANCE(lexer);
-            c = CURRENT_CHAR(lexer);
-            continue;
+    while (c != '\0' && i < LEXER_BUF_SIZE - 1) {
+        if (c == '"') {
+            /* Guillemet echappe : "" -> " (deux guillemets
+               consecutifs dans la chaine). Sinon : guillemet
+               fermant, la chaine s'arrete. */
+            if (PEEK_CHAR(lexer, 1) == '"') {
+                buf[i++] = '"';
+                ADVANCE(lexer);
+                ADVANCE(lexer);
+                c = CURRENT_CHAR(lexer);
+                continue;
+            }
+            break;
         }
 
         if (IS_EOL(c)) {

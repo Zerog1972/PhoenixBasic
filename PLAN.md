@@ -249,8 +249,8 @@ Nécessitent parser + codegen + runtime + implémentation réelle (backend SDL2 
 | 35 | SSORT array() | ❌ Token seulement | Ajouter parser 1 arg + Shell sort | Moyen |
 | 36 | SWAP a,b | ✅ Fonctionne (test_swap.bas) | — | — |
 | 37 | RANDOM(n) | ✅ Fait pendant la Priorité A | — | — |
-| 38 | DELETE x(i) | ❌ Token seulement | Suppression d'élément dans tableau | Moyen |
-| 39 | INSERT x(i), val | ❌ Token seulement | Insertion d'élément dans tableau | Moyen |
+| 38 | DELETE x(i) | ✅ | Suppression d'élément dans tableau (décalage vers la gauche, fin mise à 0) | — |
+| 39 | INSERT x(i), val | ✅ | Insertion d'élément (décalage vers la droite, dernier tronqué) | — |
 
 ---
 
@@ -325,16 +325,17 @@ Nécessite un système de buffers d'enregistrement (record I/O layer).
 
 ### C6 — Shell / Processus (SHEL_*, EXEC, CHAIN)
 
-- `SHEL_READ cmd$, tail$` — lire la ligne de commande
-- `SHEL_WRITE doex, isgr, iscr, cmd$, tail$` — lancer un programme
-- `SHEL_GET`, `SHEL_PUT`, `SHEL_FIND`, `SHEL_ENVRN` — variables d'environnement
-- `EXEC cmd$` — exécuter un programme externe
-- `CHAIN filename$` — charger et exécuter un autre programme BASIC
-- `MERGE filename$` — fusionner un fichier BASIC dans le programme courant
+- `SHEL_READ cmd$, tail$` — lire la ligne de commande — **à faire**
+- `SHEL_WRITE doex, isgr, iscr, cmd$, tail$` — lancer un programme — **à faire**
+- `SHEL_GET`, `SHEL_PUT`, `SHEL_FIND`, `SHEL_ENVRN` — variables d'environnement — **à faire**
+- `EXEC cmd$` — **FAIT** : execute la commande via `os_system()` (libc `system()`) et continue le programme
+- `SYSTEM cmd$` — **FAIT** : idem EXEC
+- `CHAIN filename$` — **FAIT** : hook `gfa_runtime_set_chain_fn()` branche par main.c ; le handler lit le fichier et relance l'interpreteur (le programme cible remplace le courant). Code erreur GFA 19 (fichier introuvable) en echec
+- `MERGE filename$` — **à faire** : fusionner un fichier BASIC dans le programme courant (sans table de lignes, approximation a definir)
 
-Nécessite fonction `os_shell_exec()`, `os_getenv()`, mécanisme CHAIN (remplacement de programme tout en préservant les variables COMMON).
+Test : `tests/test_chain.bas` (SYSTEM/EXEC/CHAIN, programme cible auto-cree et auto-detruit).
 
-**Effort :** Gros
+**Effort :** Gros (restant : SHEL_*, MERGE)
 
 ### C7 — W: et L: préfixes (passage par référence typé)
 
