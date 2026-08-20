@@ -169,6 +169,7 @@ ENDIF
 
 ' --- 12. KILL/MKDIR/FILES ---
 KILL "build/t_testfile.txt"
+RMDIR "build/t_testdir"
 MKDIR "build/t_testdir"
 check = 1  ' ne doit pas planter
 IF check THEN
@@ -248,4 +249,9 @@ ELSE
   PRINT "*** ECHECS ***"
 ENDIF
 PRINT "=== Tests nouvelles instructions termines ==="
+
+REM --- Nettoyage residus (crash precedent inclus) ---
+KILL "build/t_testfile.txt"
+RMDIR "build/t_testdir"
+
 END

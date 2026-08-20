@@ -1,11 +1,16 @@
 REM test_fsfirst.bas - FSFIRST/FSNEXT/FNAME/FATTR/FPOS/SIZE
-REM Enumere des fichiers du repertoire build/ et verifie les fonctions.
-a$ = "build/fsf_aa.bas"
-b$ = "build/fsf_bb.bas"
-c$ = "build/fsf_cc.dat"
+REM Enumere des fichiers dans un sous-repertoire dedie build/fsf/
+REM (isole des autres fichiers .BAS/.DAT du repertoire build/).
+a$ = "build/fsf/fsf_aa.bas"
+b$ = "build/fsf/fsf_bb.bas"
+c$ = "build/fsf/fsf_cc.dat"
+
+REM --- Preparation : repartir d'un etat propre (crash precedent) ---
 KILL a$
 KILL b$
 KILL c$
+RMDIR "build/fsf"
+MKDIR "build/fsf"
 OPEN "O", #1, a$
 PRINT #1, "x"
 CLOSE #1
@@ -18,7 +23,7 @@ CLOSE #3
 
 REM --- 1. Enumeration .BAS : 2 fichiers ---
 n = 0
-FSFIRST "build\*.BAS"
+FSFIRST "build\fsf\*.BAS"
 IF EOF = 1 THEN
   PRINT "KO1"
   GOTO 900
@@ -45,7 +50,7 @@ IF n <> 2 THEN PRINT "KO6 " + STR$(n) : GOTO 900
 IF EOF <> 1 THEN PRINT "KO7" : GOTO 900
 
 REM --- 2. SIZE sur .DAT ---
-FSFIRST "build\*.DAT"
+FSFIRST "build\fsf\*.DAT"
 IF EOF = 1 THEN PRINT "KO8" : GOTO 900
 nm$ = UPPER$(FNAME)
 sz = SIZE
@@ -57,7 +62,7 @@ atrv = FATTR
 IF (atrv AND 1) <> 1 THEN PRINT "KO11 " + STR$(atrv) : GOTO 900
 
 REM --- 4. Aucun fichier ---
-FSFIRST "build\*.NOPE"
+FSFIRST "build\fsf\*.NOPE"
 IF EOF <> 1 THEN PRINT "KO12" : GOTO 900
 IF FNAME <> "" THEN PRINT "KO13" : GOTO 900
 IF FPOS <> 0 THEN PRINT "KO14" : GOTO 900
@@ -68,13 +73,17 @@ x = FSNEXT
 IF x = 0 THEN PRINT "KO16" : GOTO 900
 
 REM --- Nettoyage ---
-KILL a$
-KILL b$
-KILL c$
-PRINT "TOUT OK FSFIRST"
-END
+GOTO 950
 900
 KILL a$
 KILL b$
 KILL c$
+RMDIR "build/fsf"
+END
+950
+KILL a$
+KILL b$
+KILL c$
+RMDIR "build/fsf"
+PRINT "TOUT OK FSFIRST"
 END
