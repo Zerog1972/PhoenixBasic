@@ -39,7 +39,7 @@ echo ============================================================
 echo  RESULTATS SIMULATION
 echo ============================================================
 if exist "%ROOT%build\atari\simulation_console.txt" (
-    echo [CONSOLE] Atari (simulation_console.txt)
+    echo [CONSOLE] Atari ^(simulation_console.txt^)
     REM La console VT52 utilise des CR seuls qui perturbent "type" :
     REM on affiche via PowerShell (Get-Content gere toutes les fins).
     powershell -NoProfile -Command "Get-Content -LiteralPath '%ROOT%build\atari\simulation_console.txt'"
@@ -48,7 +48,7 @@ if exist "%ROOT%build\atari\simulation_console.txt" (
     echo Pas de capture console !
 )
 if exist "%ROOT%build\atari\hatari.log" (
-    echo [DIAG] Hatari (erreurs/exceptions)
+    echo [DIAG] Hatari ^(erreurs/exceptions^)
     REM Le boot EmuTOS 1.4 genere un Bus Error connu au registre PSG
     REM ($ffffa200, PC en ROM $e00d98) : artefact du TOS, pas du programme.
     REM On l'exclut pour ne signaler que les vraies erreurs du runtime GFA.
@@ -72,4 +72,4 @@ goto end
 :err_img
 echo ERREUR: creation image disquette impossible
 goto end
-:end
+:end

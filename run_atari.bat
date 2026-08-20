@@ -13,7 +13,7 @@ del "%ROOT%build\atari\hatari.log" 2>nul
 echo.
 echo Hatari termine.
 if exist "%ROOT%build\atari\hatari.log" (
-    echo --- Diagnostic Hatari (build\atari\hatari.log) ---
+    echo --- Diagnostic Hatari ^(build\atari\hatari.log^) ---
     findstr /i "error bus exception panic" "%ROOT%build\atari\hatari.log"
     echo --- Fin du diagnostic ---
 )
@@ -32,4 +32,4 @@ goto end
 :err_img
 echo ERREUR: impossible de creer l'image disquette GFABASIC.ST
 goto end
-:end
+:end
