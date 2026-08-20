@@ -2,7 +2,10 @@
 
 Interpréteur compatible **GFA Basic 3.5 pour Atari ST**, écrit en **C ANSI (C89)**.
 
-Analyse, compile et exécute des programmes `.bas` GFA Basic 3.5. Émule les appels TOS (GEMDOS, BIOS, XBIOS, AES, VDI) et fournit un environnement console avec primitives graphiques SDL2.
+Analyse, compile et exécute des programmes `.bas` GFA Basic 3.5. Émule les appels
+TOS (GEMDOS, BIOS, XBIOS, AES partiel) et fournit un environnement console avec
+un **framebuffer graphique rendu en ANSI** dans le terminal (C89 pur, aucune
+librairie externe).
 
 ## Démarrage rapide
 
@@ -15,7 +18,7 @@ make          # compiler l'émulateur
 ## Tests
 
 ```bash
-make test-all   # 369+ tests, 100%
+make test-all   # ~300 assertions C + 30 programmes de test BASIC
 ./build/gfabasic tests/test_if.bas   # 31 tests IF/THEN/ELSE
 ```
 
@@ -151,19 +154,21 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 
 | Catégorie | Détail |
 |-----------|--------|
-| **Contrôle de flux** | IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, WHILE/WEND, REPEAT/UNTIL, SELECT/CASE/ENDSELECT, GOTO/GOSUB/RETURN/@, DO/LOOP [WHILE\|UNTIL], EXIT IF, ON x GOTO/GOSUB, STOP, END, QUIT |
+| **Contrôle de flux** | IF/THEN/ELSE/ENDIF, FOR/NEXT/STEP, FOR...DOWNTO, WHILE/WEND, REPEAT/UNTIL, SELECT/CASE/ENDSELECT, GOTO/GOSUB/RETURN/@, DO/LOOP [WHILE\|UNTIL], EXIT IF, ON x GOTO/GOSUB, STOP, END, QUIT |
 | **Procédures/Fonctions** | PROCEDURE, FUNCTION, RETURN expr, ENDFUNC, LOCAL, VAR (by-ref), DEFFN/FN, récursion, appels sans parenthèses (`maProc 3, 7`) |
-| **Tableaux 1D** | DIM, OPTION BASE 0/1 (base des indices), ERASE/ARRAYFILL/DIM? non implémentés |
-| **Opérateurs** | `+` `-` `*` `/` `^` `=` `<>` `<` `>` `<=` `>=` AND OR XOR NOT EQV IMP MOD DIV, & (concat) |
+| **Tableaux 1D** | DIM, OPTION BASE 0/1 (base des indices), ERASE, ARRAYFILL, DIM?, QSORT, SSORT, INSERT, DELETE, SWAP |
+| **Opérateurs** | `+` `-` `*` `/` `^` `=` `<>` `<` `>` `<=` `>=` `==` (approx.), AND OR XOR NOT EQV IMP MOD DIV, & (concat), ~ (NOT bit) |
 | **Mathématiques** | 35 fonctions : SIN/COS/TAN/ATN/ASIN/ACOS/SINQ/COSQ/SINH/COSH/TANH, EXP/LOG/LOG10/SQR, ABS/SGN/INT/FRAC/FIX/ROUND/CEIL/TRUNC, MIN/MAX/EVEN/ODD/PRED/SUCC, FACT/COMBIN/VARIAT, RND, DEG/RAD, CFLOAT/CINT |
-| **Chaînes** | 28 fonctions : LEN, ASC, CHR$, VAL, VAL?, LEFT$/RIGHT$/MID$, INSTR, RINSTR, UPPER$/LCASE$/LOWER$, TRIM$, STR$, BIN$, HEX$, OCT$, SPACE$, STRING$, MKI$/MKL$/MKS$/MKF$/MKD$, CVI/CVL/CVS/CVF/CVD |
+| **Chaînes** | 28 fonctions : LEN, ASC, CHR$, VAL, VAL?, LEFT$/RIGHT$/MID$, INSTR, RINSTR, UPPER$/LCASE$/LOWER$/, UCASE$, TRIM$, STR$, BIN$, HEX$, OCT$, SPACE$, STRING$, MKI$/MKL$/MKS$/MKF$/MKD$, CVI/CVL/CVS/CVF/CVD |
 | **Opérateurs bits** | BTST, BSET, BCLR, BCHG, SHL, SHR, ROL, ROR |
-| **Print** | PRINT, PRINT #, PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, INPUT #, INKEY$, CLS, LOCATE |
-| **Fichiers** | OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#/INPUT# |
-| **Mémoire** | PEEK/POKE/DPEEK/DPOKE/LPEEK/LPOKE (vmem), DATA/READ/RESTORE, MALLOC (partiel), BSAVE (stub) |
-| **Graphismes SDL2** | COLOR (palette 16 couleurs), LINE, BOX, PBOX, CIRCLE, PCIRCLE |
+| **Matrices** | MAT SET/CLR/ONE/CPY/ADD/SUB/MUL/TRANS/INV/DET/RANG/NORM/PRINT/READ/INPUT |
+| **Print** | PRINT, PRINT #, PRINT AT(x,y), PRINT USING (format #, ##.##, **, $$, +, -, ^^^^, virgules), INPUT, LINE INPUT, INPUT #, LINE INPUT #, INKEY$, CLS, LOCATE, LSET/RSET |
+| **Fichiers** | OPEN/CLOSE (I/O/R/A/U), OPENW/CLOSEW, PRINT#/INPUT#, BGET/BPUT, KILL, MKDIR, FILES, EXIST, CHAIN |
+| **Mémoire** | PEEK/POKE/DPEEK/DPOKE/LPEEK/LPOKE/SPOKE/SDPOKE/SLPOKE (vmem 68k), DATA/READ/RESTORE, MALLOC (partiel), BLOAD/BSAVE/BGET/BPUT, FRE/HIMEM |
+| **Graphismes** | Framebuffer ANSI (640×400 → terminal ; 320×200 sur MiNT) : COLOR, SETCOLOR, LINE, ALINE, HLINE, BOX, PBOX, CIRCLE, PCIRCLE, PLOT, POINT/PTST, DRAW (tortue), CURVE, PELLIPSE, RBOX, SETDRAW, FILL, CLIP, ACLIP, TEXT, ATEXT, ACHAR, POLYLINE, POLYFILL, POLYMARK, APOLY, MODE, HARDCOPY, GET/PUT, WINDOW, MOUSE |
 | **Son** | BEEP, SOUND ch, freq, dur, vol, env |
-| **Événements** | EVERY, AFTER, ON ERROR, ERROR, ERR |
+| **Événements** | EVERY, AFTER, ON ERROR, ERROR, ERR, RESUME, FATAL, PAUSE, DELAY, WAIT, ON BREAK (parsé) |
+| **Système/TOS** | GEMDOS()/BIOS()/XBIOS()/VDISYS(), SYSTEM/EXEC, SHEL_*, FSFIRST/FSNEXT/FNAME, DIR$, DFREE, KILL, MKDIR, TIMER/DATE$/TIME$/SETTIME, CONIN/CONOUTI, KEY/ON KEY |
 | **Debug** | TRON, TROFF |
 | **Édition** | LIST avec indentation, EDIT en place (← → Home End Bksp Del), INSERT, DELETE, LOAD/SAVE |
 
@@ -173,15 +178,18 @@ Les mots-clés sont automatiquement mis en majuscules à la saisie.
 main.c ──┬── lexer/     (490 keywords, tokens, EOL)
          ├── parser/    (LL(1), AST, labels 2-pass)
          ├── codegen/   (AST → bytecode)
-         └── runtime/   (VM pile, call stack, builtins)
-              ├── memory/    (symboles, tableaux)
-              ├── builtins/  (maths 35/35, chaînes 28/28, bits 8/8)
+         └── runtime/   (VM pile, call stack, erreurs)
+              ├── vm_builtin.c    (fonctions intégrées, ~2000 lignes)
+              ├── vm_statement.c  (opcodes instructions, ~2000 lignes)
+              ├── memory/    (symboles, tableaux, DATA)
+              ├── builtins/  (maths 35/35, chaînes 28/28, bits 8/8, MAT)
               ├── io/        (fichiers, BLOAD/BSAVE/BGET/BPUT)
               ├── events/    (EVERY, AFTER, ON ERROR)
               ├── sound/     (BEEP, SOUND)
-              ├── tos/       (GEMDOS, BIOS, XBIOS, AES)
-              └── graphics/  (SDL2, COLOR, LINE, BOX, CIRCLE)
- utils/os_layer   (abstraction fichiers, console, temps)
+              ├── tos/       (GEMDOS, BIOS, XBIOS, AES partiel)
+              ├── graphics/  (framebuffer ANSI, C89 pur, sans SDL2)
+              └── vmem.c     (mémoire virtuelle 68k pour PEEK/POKE)
+ utils/os_layer   (abstraction fichiers, console, temps — Windows + MiNT)
 ```
 
 ## Plan de développement
@@ -193,11 +201,11 @@ et le plan de travail priorisé.
 
 | Priorité | Nb items | Effort | Description |
 |----------|----------|--------|-------------|
-| **✅ Implémenté** | ~155 | — | Flux, procédures, maths, chaînes, bits, print AT/USING, conversion binaire, fichiers, graphismes, TOS partiel, vmem (PEEK/POKE réels) |
-| **✅ Priorité A** | 22/22 | fait (2026-08-15) | Runtime cases : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, ==, RAND(n), PEEK/POKE via vmem… |
+| **✅ Implémenté** | ~200 | — | Flux (DOWNTO inclus), procédures, maths, chaînes, bits, matrices MAT, tableaux (ERASE/ARRAYFILL/QSORT/INSERT/DELETE), graphismes ANSI avancés, fichiers (BLOAD/BSAVE, KILL, FILES), TOS partiel, SHEL/CHAIN, FSFIRST, vmem (PEEK/POKE réels) |
+| **✅ Priorité A** | 22/22 | fait (2026-08-15) | Runtime cases : VAL?, INPUT$, PAUSE, MOUSE, TIMER, DATE$/TIME$, `==`, RAND(n), PEEK/POKE via vmem… |
 | **✅ Correctifs boucles/TOS** | 4 | fait (2026-08-15) | DO/LOOP [WHILE\|UNTIL] (était no-op silencieux), EXIT IF (parser+codegen, toutes boucles), OPTION BASE 0/1 (parse + base des tableaux), GEMDOS()/BIOS()/XBIOS() (opcodes câblés au codegen) |
-| **🔜 Priorité B** | 35 | ~5-7 jours | Parser + codegen + runtime : graphismes avancés (PLOT, DRAW, TEXT, POLYLINE, FILL, BITBLT…), SETTIME, QSORT, INSERT/DELETE |
-| **⏳ Priorité C** | 10 | ~4-8 semaines | Nouveaux sous-systèmes : GEM AES, VDI, MAT, FIELD, SHEL, CHAIN |
+| **🔜 Priorité B** | ~3/40 | quasi terminé | Restant : BITBLT, VSETCOLOR, BOUNDARY (le reste — graphismes avancés, SETTIME, QSORT, INSERT/DELETE, RESUME label, FATAL — est fait) |
+| **⏳ Priorité C** | ~7/10 | ~3-6 semaines | Restant : GEM AES complet, VDI (CONTRL/INTIN/INTOUT), fichiers random (FIELD/GET#/PUT#), W:/L: préfixes, stubs TOS. Fait d'ores et déjà : MAT, CHAIN, SHEL partiel |
 
 ## Limitations
 
@@ -205,10 +213,11 @@ et le plan de travail priorisé.
 |-----------|--------|
 | Mots-clés comme noms | Certains mots (`add`, `val`, `double`, `inc`) sont réservés car le lexer n'est pas contextuel |
 | Format flottant | IEEE-754 (double précision), pas le format GFA propriétaire 8 octets |
-| GEM AES | APPL_INIT/EXIT ok. FORM_ALERT, MENU_BAR, WIND_*, EVNT_* sont des stubs (retournent 0). Voir PLAN.md |
+| GEM AES | Émulation partielle : APPL_INIT/EXIT, WIND_*, CLEARW/TITLEW fonctionnent sans erreur ; FORM_ALERT et le reste sont des stubs (retournent 0). Voir PLAN.md |
 | RESTORE label | Parse OK mais la restauration est globale (le label est ignoré au runtime) |
 | `:` séparateur | Non supporté — une ligne = une instruction (conforme au vrai GFA Basic 3.5) |
 | Lignes numérotées | Non supportées (`10 PRINT …`). Utiliser des étiquettes nommées (`deb:` / `GOTO deb`) : le lexer ne reconnaît pas un nombre en début de ligne comme numéro de ligne |
-| `FOR … DOWNTO` | Non implémentée (erreur de parse) — utiliser une boucle WHILE avec décrément |
-| `ERASE` / `CLEAR` / `ON BREAK` | Parsées mais sans effet (no-op) — les valeurs survivent |
-| `LINE INPUT`, `HTAB`, `VTAB`, `UCASE$` | Non implémentés (erreur de parse ou runtime error 9) — `LINE INPUT` échoue car `LINE` est lexée comme le mot-clé graphique |
+| `HTAB`, `VTAB` | Parsés sans effet (no-op) — utiliser LOCATE |
+| `ON BREAK` | Parsé (CONT) mais sans gestion de breakpoint réelle |
+| `MALLOC` | Partiel — le libéré n'est pas complet |
+| Graphiques restants | BITBLT, VSETCOLOR, BOUNDARY non câblés (le token existe, pas le parser) |

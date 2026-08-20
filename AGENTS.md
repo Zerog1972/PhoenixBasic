@@ -8,13 +8,18 @@
 main.c ──┬── lexer/    (token.h, keywords.c/h, lexer.c/h)
          ├── parser/   (ast.c/h, parser.c/h — LL(1) récursif)
          ├── codegen/  (codegen.c/h — AST → bytecode)
-         └── runtime/  (runtime.c/h — VM à pile, call stack, builtins)
+         └── runtime/  (runtime.c/h — VM à pile, call stack, erreurs)
+              ├── vm_builtin.c   (opcode OP_CALL_BUILTIN : fonctions intégrées)
+              ├── vm_statement.c (opcodes instructions : PRINT, fichiers, gfx, MAT…)
+              ├── vm_internal.h  (contrat VM_ADV/VM_RET0 entre modules VM)
+              ├── vmem.c         (mémoire virtuelle 68k — PEEK/POKE)
               ├── memory/   (memory.c — symboles, tableaux, DATA)
-              ├── builtins/ (gfamath.c/h, strings.c/h)
+              ├── builtins/ (gfamath.c/h, strings.c/h, matrix.c/h)
               ├── io/       (files.c/h)
               ├── events/   (events.c/h — EVERY, AFTER, ON ERROR)
               ├── sound/    (sound.c/h — BEEP, SOUND)
-              └── tos/      (tos.c/h — GEMDOS, BIOS, XBIOS)
+              ├── tos/      (tos.c/h — GEMDOS, BIOS, XBIOS)
+              └── graphics/ (gfx.c/h — framebuffer ANSI, sans SDL2)
  utils/os_layer (os_layer.c/h — abstraction fichiers, console, temps)
  build/          (objets .o)
  tests/          (test_*.c, test_*.bas)
@@ -48,7 +53,7 @@ main.c ──┬── lexer/    (token.h, keywords.c/h, lexer.c/h)
 ```bash
 make          # Compile tout
 make app      # Compile l'émulateur
-make test-all # Lance tous les tests (267+, 100%)
+make test-all # Lance tous les tests (~300 assertions C + 30 programmes BASIC, 100%)
 make test-os  # Test os_layer uniquement
 make test-rt  # Test runtime uniquement
 make test-lexer  # Test lexer uniquement
@@ -68,7 +73,7 @@ make clean    # Nettoie build/
 
 - **Tests C** dans `tests/test_*.c` — basés sur des `assert()`, sans framework
 - **Tests BASIC** dans `tests/test_*.bas` — programmes .bas avec PRINT
-- Coverage : `make test-all` = 267+ tests, visé 100%
+- Coverage : `make test-all` = ~300 assertions C + 30 programmes BASIC, visé 100%
 - Tests BASIC à exécuter avec `./build/gfabasic tests/test_*.bas`
 
 ## Bytecode (VM à pile)
