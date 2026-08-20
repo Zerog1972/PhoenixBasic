@@ -33,6 +33,8 @@ src\events\events.c
 src\sound\sound.c
 src\tos\tos.c
 src\runtime\runtime.c
+src\runtime\vm_builtin.c
+src\runtime\vm_statement.c
 src\runtime\vmem.c
 src\memory\memory.c
 src\lexer\keywords.c
